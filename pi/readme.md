@@ -24,7 +24,8 @@ sudo apt install -y \
 pip3 install \
     opencv-python \
     pyserial \
-    waitress
+    waitress \
+    requests
 ```
 
 Simplify the login message:
