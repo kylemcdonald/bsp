@@ -1,0 +1,133 @@
+<html>
+  <head>
+    <link rel="icon" href="data:;base64,=" />
+    <title>Control</title>
+    <style>
+      body {
+        font-family: sans-serif;
+      }
+      input,
+      button {
+        margin: 0.5em 0;
+        font-size: 1em;
+      }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/p5@1.2.0/lib/p5.js"></script>
+    <script>
+      const dim = 400;
+      let last;
+      let path = [];
+
+      function setup() {
+        const c = createCanvas(dim, dim);
+        c.mousePressed(mousePressedInner);
+        c.mouseReleased(mouseReleasedInner);
+        c.mouseMoved(mouseMovedInner);
+        c.parent("container");
+        background(220);
+      }
+
+      function draw() {
+        background(220);
+        noFill();
+        beginShape();
+        path.forEach((e) => vertex(...e));
+        endShape();
+        const r = 1;
+        path.forEach((e) => {
+          square(e[0] - r, e[1] - r, 2 * r);
+        });
+      }
+
+      function mousePressedInner() {
+        path = [];
+      }
+
+      function mouseMovedInner() {
+        if (!mouseIsPressed) {
+          return;
+        }
+        path.push([mouseX, mouseY]);
+      }
+
+      function mouseReleasedInner() {
+        path.push([mouseX, mouseY]);
+      }
+
+      function createCircle(n, r) {
+        path = [];
+        for (let t = 0; t < n; t++) {
+          const theta = map(t, 0, n - 1, 0, Math.PI * 2);
+          const x = r * Math.cos(theta) + dim / 2;
+          const y = r * Math.sin(theta) + dim / 2;
+          path.push([x, y]);
+        }
+      }
+
+      function circleClick() {
+        createCircle(
+          document.getElementById("circle-n").value,
+          document.getElementById("circle-r").value
+        );
+      }
+
+      function send() {
+        const speed = document.getElementById("speed").value;
+        fetch("/draw", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            path: path,
+            speed: speed,
+          }),
+        });
+      }
+
+      function stop() {
+        fetch("/clear");
+      }
+
+      function button() {
+        fetch("/button");
+      }
+    </script>
+  </head>
+  <body>
+    <div>
+      <button onclick="fetch('/go?x=0&y=0')">Go to 0,0</button>
+      <button onclick="fetch('/jog?x=+1&y=0')">Jog +1,0</button>
+      <button onclick="fetch('/jog?x=-1&y=0')">Jog -1,0</button>
+      <button onclick="fetch('/jog?x=0&y=+1')">Jog 0,+1</button>
+      <button onclick="fetch('/jog?x=0&y=-1')">Jog 0,-1</button>
+    </div>
+    <div>
+      <input
+        type="range"
+        min="4"
+        max="500"
+        value="100"
+        id="circle-n"
+        oninput="circleClick()"
+      />
+      <input
+        type="range"
+        min="10"
+        max="200"
+        value="150"
+        id="circle-r"
+        oninput="circleClick()"
+      />
+      Circle
+    </div>
+    <div id="container"></div>
+    <div>
+      <input type="range" min="1" max="99" value="50" id="speed" />
+      Speed
+    </div>
+    <button onclick="send()">Send</button>
+    <button onclick="stop()">Stop</button>
+    <button onclick="button()">Button</button>
+  </body>
+</html>
