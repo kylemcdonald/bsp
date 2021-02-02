@@ -1,4 +1,4 @@
-# import serial
+import serial
 import warnings
 import datetime
 import threading
@@ -9,13 +9,16 @@ import flask
 from flask import Flask
 from waitress import serve
 
+from serial.tools import list_ports
+try:
+    port = next(list_ports.grep('USB'))
+    port = port.device
+except StopIteration:
+    port = None
+
 def log(*args):
     dt = datetime.datetime.now().replace(microsecond=0)
     print(dt, *args)
-
-# from serial.tools import list_ports
-# list_ports.comports()
-# list(list_ports.grep('.*'))
 
 class FakeSerial:
     def __init__(self, timeout):
@@ -46,8 +49,12 @@ def chunks(x, n):
 class Plotter(threading.Thread):
     def __init__(self, port=None, baudrate=115200, timeout=3, spoon_size=15):
         super().__init__()
-#         self.ser = serial.Serial(port, baudrate, timeout=timeout)
-        self.ser = FakeSerial(timeout=timeout)
+        if port is None:
+            log('no serial port available')
+            self.ser = FakeSerial(timeout=timeout)
+        else:
+            log('using port', port)
+            self.ser = serial.Serial(port, baudrate, timeout=timeout)
         self.spoon_size = spoon_size
         self.ready = True
         self.queue = queue.Queue()
@@ -95,16 +102,19 @@ class Plotter(threading.Thread):
     def run(self):
         while not self.shutdown.is_set():
             try:
+                time.sleep(0.2)
                 # send (up to) spoon_size messages, if available
                 for i in range(self.spoon_size):
                     msg = self.queue.get(timeout=1)
-                    self.ser.write(msg)
+                    self.ser.write(msg.encode('ascii'))
                 try:
                     # after sending messages, wait for a response
                     response = self.ser.read()
-                    if response == 'A':
+                    if response in [b'A', b'\r', b'\n']:
+                        log(f'plotter> received {repr(response)}')
                         continue
-                    warnings.warn(datetime.datetime.now(), f'unexpected response "{response}"')
+                    warning = f'{datetime.datetime.now()} unexpected response "{response}"'
+                    warnings.warn(warning)
                 except serial.SerialTimeoutException:
                     # if we get a timeout waiting for a message,
                     # move on to the next loop
@@ -115,7 +125,7 @@ class Plotter(threading.Thread):
         log('plotter> received shutdown')
 
 app = Flask(__name__)
-plotter = Plotter()
+plotter = Plotter(port)
 
 @app.route('/')
 def index():
