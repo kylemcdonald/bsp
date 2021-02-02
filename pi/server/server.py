@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 import serial
 import warnings
 import datetime
@@ -5,9 +6,13 @@ import threading
 import time
 import queue
 
+from gpiozero import LED
 import flask
 from flask import Flask
 from waitress import serve
+
+led = LED(4)
+led.on()
 
 from serial.tools import list_ports
 try:
@@ -166,5 +171,5 @@ def button():
     log('button> pressed')
     return '',200
 
-serve(app, listen='*:8889')
+serve(app, listen='*:8080')
 plotter.join()

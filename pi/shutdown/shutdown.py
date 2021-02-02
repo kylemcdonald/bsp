@@ -1,12 +1,22 @@
 #!/usr/bin/python3
 import time
 import datetime
-from gpiozero import InputDevice
+from gpiozero import InputDevice, LED
 import subprocess
+
+button_pin = 3
+led_pin = 4
+
+led = LED(led_pin)
+button = InputDevice(button_pin, pull_up=True)
+last_active = False
+last_press = None
+
+led.on()
 
 def button_hold(now, seconds):
     if seconds > 3:
-        print('shutdown')
+        led.off()
         subprocess.call(['shutdown', '-h', 'now'], shell=False)
     
 def button_release(now, seconds):
@@ -14,11 +24,6 @@ def button_release(now, seconds):
     #     print('rebooting')
     #     exit()
     pass
-
-pin = 3
-button = InputDevice(pin, pull_up=True)
-last_active = False
-last_press = None
 
 while True:
     cur_active = button.is_active

@@ -1,0 +1,11 @@
+[Unit]
+Description=Server Service
+
+[Service]
+User=root
+WorkingDirectory=/home/ubuntu/bsp/pi/server/
+ExecStart=/home/ubuntu/bsp/pi/server/server.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
