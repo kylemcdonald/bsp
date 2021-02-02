@@ -1,0 +1,10 @@
+[Unit]
+Description=Shutdown Service
+
+[Service]
+User=root
+ExecStart=/home/ubuntu/bsp/pi/shutdown/shutdown.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
