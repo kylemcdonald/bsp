@@ -1,1 +1,8 @@
 *.jpg
+*.bmp
+*.json
+*.geojson
+*.pyc
+
+potrace
+cld

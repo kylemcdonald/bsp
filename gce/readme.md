@@ -8,12 +8,38 @@
 
 Log in, `ssh-keygen` and add to GitHub. Clone this repo.
 
-```
+```console
 sudo apt update
-sudo apt install -y python3-pip
-pip3 install --user waitress flask
+sudo apt install -y \
+    python3-pip
+pip3 install \
+    waitress \
+    flask \
+    pillow \
+    opencv-python-headless \
+    matplotlib \
+    shapely \
+    centerline \
+    tqdm
+pip3 install git+https://github.com/fraenkel-lab/pcst_fast.git
 ```
 
-This will print a warning about `waitress-serve` and `flask` not being on PATH, but this isn't an issue.
+This will print a warning about binaries not being on PATH, but this isn't an issue.
+
+If you install `opencv-python` on GCE it will complain, which is why you need [`opencv-python-headless`](https://stackoverflow.com/a/63978454/940196).
+
+Build CLD:
+
+```console
+sudo apt update
+sudo apt install \
+    cmake \
+    libopencv-dev \
+    libboost-all-dev \
+    libwxgtk3.0-gtk3-dev
+cd ~ && git clone https://github.com/SSARCandy/Coherent-Line-Drawing.git
+cd Coherent-Line-Drawing
+./build.sh
+```
 
 Create a Google Cloud Firewall rulle to allow port 8080 on IP range 0.0.0.0/0 for all instances in network.
