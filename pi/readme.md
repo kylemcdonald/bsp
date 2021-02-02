@@ -24,12 +24,23 @@ sudo apt install -y \
 pip3 install \
     opencv-python \
     pyserial \
+    flask \
     waitress \
-    requests
+    requests \
+    RPi.GPIO \
+    gpiozero
 ```
+
+Enable gpio permissions [for all users](https://github.com/gpiozero/gpiozero/issues/837#issuecomment-703743142): `sudo chmod og+rwx /dev/gpio*`.
 
 Simplify the login message:
 
 ```
 sudo chmod -x /etc/update-motd.d/{10-help-text,50-motd-news,90-updates-available,91-release-upgrade,92-unattended-upgrades}
 ```
+
+## Possible problems
+
+If you don't enable gpio permissions, RPi.GPIO or gpiozero will say `Not running on a RPi!`.
+
+RPi.GPIO does not support `wait_for_edge` on newer operating systems, possibly [due to a kernel deprecation](https://sourceforge.net/p/raspberry-gpio-python/tickets/175/). It will say `RuntimeError: Error waiting for edge` if you try to `wait_for_edge`. Simply creating a `Button` with `gpiozero` will cause `RuntimeError: Failed to add edge detection`.

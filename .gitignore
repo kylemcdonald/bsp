@@ -4,5 +4,7 @@
 *.geojson
 *.pyc
 
+.ipynb_checkpoints
+
 potrace
 cld

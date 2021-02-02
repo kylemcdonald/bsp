@@ -102,7 +102,7 @@ class Plotter(threading.Thread):
     def run(self):
         while not self.shutdown.is_set():
             try:
-                time.sleep(0.2)
+                time.sleep(0.3)
                 # send (up to) spoon_size messages, if available
                 for i in range(self.spoon_size):
                     msg = self.queue.get(timeout=1)

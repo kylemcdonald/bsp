@@ -11,3 +11,4 @@ with open('img.jpg', 'rb') as f:
 response = requests.post(endpoint, data=payload, headers=headers)
 data = response.json()
 print(data)
+# print(response.raw.data)
