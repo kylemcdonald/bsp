@@ -7,16 +7,16 @@ import subprocess
 button_pin = 3
 led_pin = 4
 
-led = LED(led_pin)
 button = InputDevice(button_pin, pull_up=True)
 last_active = False
 last_press = None
 
+led = LED(led_pin)
 led.on()
 
 def button_hold(now, seconds):
     if seconds > 3:
-        led.off()
+        led.blink(.05, .5)
         subprocess.call(['shutdown', '-h', 'now'], shell=False)
     
 def button_release(now, seconds):

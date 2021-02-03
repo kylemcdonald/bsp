@@ -14,8 +14,6 @@ sudo systemctl daemon-reload
 
 `sudo reboot now` then log back in and upgrade `sudo apt update && sudo apt full-upgrade -y`
 
-Install Avahi to allow `.local` access: `sudo apt install avahi-daemon`
-
 Install dependencies:
 
 ```
@@ -33,12 +31,6 @@ sudo pip3 install \
 
 Enable gpio permissions [for all users](https://github.com/gpiozero/gpiozero/issues/837#issuecomment-703743142): `sudo chmod og+rwx /dev/gpio*`.
 
-Simplify the login message:
-
-```
-sudo chmod -x /etc/update-motd.d/{10-help-text,50-motd-news,90-updates-available,91-release-upgrade,92-unattended-upgrades}
-```
-
 Setup the shutdown script:
 
 ```
@@ -52,6 +44,42 @@ Setup the server script:
 cd ~/bsp/pi/server
 bash install-server.sh
 ```
+
+## Remote access
+
+Install and connect to Zerotier `NETWORK_ID`:
+
+```
+curl -s https://install.zerotier.com | sudo bash
+sudo zerotier-cli $NETWORK_ID
+```
+
+Zerotier creates a VPN. Access the pi with `ssh ubuntu@ubuntu.local`
+
+Download and install ngrok using `AUTH_TOKEN`:
+
+```
+sudo apt install unzip
+cd ~
+wget https://raw.githubusercontent.com/vincenthsu/systemd-ngrok/master/install.sh
+sed -i "s/amd64/arm64/g" install.sh
+sudo bash install.sh $AUTH_TOKEN
+sudo rm -rf install.sh systemd-ngrok 
+```
+
+ngrok tunnels a port to ssh. If ngrok says the service is running at `tcp://0.tcp.ngrok.io:1234` then access the pi with `ssh ubuntu@0.tcp.ngrok.io -p1234`
+
+## Niceness
+
+Install Avahi to allow `.local` access: `sudo apt install avahi-daemon`
+
+Simplify the login message:
+
+```
+sudo chmod -x /etc/update-motd.d/{10-help-text,50-motd-news,90-updates-available,91-release-upgrade,92-unattended-upgrades}
+```
+
+With ngrok exposing the machine publicly, [disable ssh passwords](https://www.cyberciti.biz/faq/how-to-disable-ssh-password-login-on-linux/).
 
 ## Possible problems
 
