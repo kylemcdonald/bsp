@@ -7,9 +7,9 @@ class Ring {
     unsigned int begin = 0;
     unsigned int length = 0;
 public:
-    Ring(unsigned int max_size) {
+    Ring(T* buffer, unsigned int max_size) {
+        this->buffer = buffer;
         this->max_size = max_size;
-        this->buffer = new T [max_size];
     }
     void push_back(const T& value) {
         if (length == max_size) {

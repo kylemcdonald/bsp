@@ -3,56 +3,55 @@
 
 #include <SPI.h>
 
-#include "src/AccelStepper/AccelStepper.h"
 #include "Ring.h"
+#include "src/AccelStepper/AccelStepper.h"
 
 // settings
 const int spoonSize = 512;
 const int smoothing = 180;
-const int XYmaxSpeed = 6000; //as of 2021.01.27 // base max speed, actual setting later modified when multiplied by (speedDiv/100)
-const int XYaccell = 11000; //as of 2021.01.27 //max accell in steps per second per second
-const int Xlimit = 10000; // set max steps in X axis // 2021.01.27 using 400 steps per revolution step driver setting. // this is roughly 90% full travel of the physical axis.
-const int Ylimit = 10000; // set max steps in Y axis // 2021.01.27 using 400 steps per revolution step driver setting. // this is roughly 90% full travel of the physical axis.
-const int bufferScale = 6;
-const int bufferSize = 256 * (1 << bufferScale);
-const int initialX = 5000;
-const int initialY = 5000;
+const long baseSpeed = 6000; // base max speed
+const int acceleration = 11000; // max acceleration in steps per second per second
+const short Xlimit = 10000; // set max steps in X axis, roughly 90% of full travel
+const short Ylimit = 10000; // set max steps in Y axis, roughly 90% of full travel
+const int bufferSize = 100000;
+const short initialX = 5000;
+const short initialY = 5000;
 
 // declare and initialize variables used throughout the code
 AccelStepper stepperY(1, 2, 3); // (a,b,c) a== type of motor, b & c are pin assignments//1 for a = stepper driver. (ZACH NEEDS a=1)
 AccelStepper stepperX(1, 4, 5); // (a,b,c) a== type of motor, b & c are pin assignments//1 for a = stepper driver. (ZACH NEEDS a=1)
 
-int speedDiv = 100;
 String inputString = ""; // a string to hold incoming data
+String arg = "";
 boolean GO = false;
 
 int readCount = 0;
 
-int Xtarget = 0;
-int Ytarget = 0;
+short Xtarget = 0;
+short Ytarget = 0;
+short maxSpeed = baseSpeed;
 
-String Xrecieved = "";
-String Yrecieved = "";
-String MSrecieved = "";
-
-struct Go {
-    int x, y, speed;
+struct Point {
+    short x, y;
 };
 
-Ring<Go> buffer(bufferSize);
+Point rawBuffer[bufferSize];
+Ring<Point> buffer(rawBuffer, bufferSize);
 
 void setup()
 {
     Serial.begin(115200);
 
     stepperX.setCurrentPosition(initialX);
+    stepperX.setMaxSpeed(baseSpeed);
+    stepperX.setAcceleration(acceleration);
+
     stepperY.setCurrentPosition(initialY);
+    stepperY.setMaxSpeed(baseSpeed);
+    stepperY.setAcceleration(acceleration);
 
-    stepperX.setMaxSpeed(XYmaxSpeed); // 450
-    stepperX.setAcceleration(XYaccell); //ACCELLERATION IN STEPS PER SECOND PER SECOND
-
-    stepperY.setMaxSpeed(XYmaxSpeed); // 450
-    stepperY.setAcceleration(XYaccell); //ACCELLERATION IN STEPS PER SECOND PER SECOND
+    // points[0] = 1;
+    // points[1] = 1;
 }
 
 void loop()
@@ -63,56 +62,49 @@ void loop()
     // read all the serial data that is available
     while (Serial.available()) {
         const char inChar = Serial.read();
-    
+
         // continue calling run() while reading
         stepperX.run();
         stepperY.run();
 
         if (isDigit(inChar)) {
             inputString += inChar;
-        } else if (inChar == 's') { // lowercase 's' is the code for stop or pause
+        } else if (inChar == 's') { // 's' sets the speed
+            arg = "";
+            arg += inputString.charAt(0);
+            arg += inputString.charAt(1);
+            const long speedPct = arg.toInt();
+            maxSpeed = (baseSpeed * speedPct) / 99;
+            inputString = "";
+        } else if (inChar == 'p') { // 'p' pauses
             GO = false;
             buffer.clear();
             inputString = "";
-        } else if (inChar == 'g') { // A 'g' comes after a movement comand
+        } else if (inChar == 'g') { // 'g' goes to point
             GO = true;
-
-            // grabbing the X AXIS TARGET
-            Xrecieved += ((inputString.charAt(0)));
-            Xrecieved += ((inputString.charAt(1)));
-            Xrecieved += ((inputString.charAt(2)));
-            Xrecieved += ((inputString.charAt(3)));
-            Xrecieved += ((inputString.charAt(4)));
-
-
-            // grabbing the Y AXIS TARGET
-            Yrecieved += ((inputString.charAt(5)));
-            Yrecieved += ((inputString.charAt(6)));
-            Yrecieved += ((inputString.charAt(7)));
-            Yrecieved += ((inputString.charAt(8)));
-            Yrecieved += ((inputString.charAt(9)));
-
-            // grabbing the MOVEMENT SPEED NUMBERS
-            MSrecieved += ((inputString.charAt(10)));
-            MSrecieved += ((inputString.charAt(11)));
-
-            Go go;
-            go.x = Xrecieved.toInt();
-            go.y = Yrecieved.toInt();
-            go.speed = MSrecieved.toInt();
-            buffer.push_back(go);
+            Point point;
+            arg = "";
+            arg += inputString.charAt(0);
+            arg += inputString.charAt(1);
+            arg += inputString.charAt(2);
+            arg += inputString.charAt(3);
+            arg += inputString.charAt(4);
+            point.x = arg.toInt();
+            arg = "";
+            arg += inputString.charAt(5);
+            arg += inputString.charAt(6);
+            arg += inputString.charAt(7);
+            arg += inputString.charAt(8);
+            arg += inputString.charAt(9);
+            point.y = arg.toInt();
+            buffer.push_back(point);
+            inputString = "";
 
             // readCount++;
             // if (readCount == spoonSize) {
             //     Serial.println(buffer.size());
             //     readCount = 0;
             // }
-
-            // clear the string for new input:
-            inputString = "";
-            Xrecieved = "";
-            Yrecieved = "";
-            MSrecieved = "";
         }
     }
 
@@ -120,11 +112,11 @@ void loop()
 
         if (((abs(stepperX.distanceToGo())) < (smoothing)) && ((abs(stepperY.distanceToGo())) < (smoothing))) {
 
+            // update if we can
             if (buffer.size() > 0) {
-                Go go = buffer.pop_front();
-                Xtarget = go.x;
-                Ytarget = go.y;
-                speedDiv = go.speed;
+                Point point = buffer.pop_front();
+                Xtarget = point.x;
+                Ytarget = point.y;
             }
 
             // clamp targets
@@ -139,22 +131,8 @@ void loop()
                 Ytarget = 0;
             }
 
-            // Calculating and then setting the maximum XYZ movement speeds: Based on the XYmaxSpeed set
-            // in this program and multiplying those by the speedDiv variable recieved per target point.
-            // Setting the resulting values to the max speeds for the relative stepper motors.
-            // We are controlling the 'speed' of the machine motion by setting the MAX speed. The machine can always move below that setting.
-
-            if (speedDiv < 100) {
-                const int XYmax = int((XYmaxSpeed / ((100 / speedDiv))));
-
-                stepperX.setMaxSpeed(XYmax); // 400
-                stepperY.setMaxSpeed(XYmax); // 400
-            } else if (speedDiv >= 100) {
-                const int XYmax = int(((XYmaxSpeed * (speedDiv / 100))));
-
-                stepperX.setMaxSpeed(XYmax); // 400
-                stepperY.setMaxSpeed(XYmax); // 400
-            }
+            stepperX.setMaxSpeed(maxSpeed);
+            stepperY.setMaxSpeed(maxSpeed);
 
             stepperX.moveTo(Xtarget);
             stepperY.moveTo(Ytarget);

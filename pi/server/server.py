@@ -76,13 +76,16 @@ class Plotter(threading.Thread):
         log('plotter> clear')
         with self.queue.mutex:
             self.queue.queue.clear() 
-        self.queue.put('s')
+        self.queue.put('p')
+
+    def speed(self, speed):
+        speed = clamp_and_round(speed, 'speed', 1, 99)
+        self.queue.put(f'{speed:02d}s')
         
-    def go(self, x, y, speed=50):
+    def go(self, x, y):
         x = clamp_and_round(x, 'x', 0)
         y = clamp_and_round(y, 'y', 0)
-        speed = clamp_and_round(speed, 'speed', 1, 99)
-        self.queue.put(f'{x:05d}{y:05d}{speed:02d}g')
+        self.queue.put(f'{x:05d}{y:05d}g')
         
     def draw(self, path, **args):
         for point in path:
@@ -135,15 +138,17 @@ def go():
     x = int(req.args.get('x'))
     y = int(req.args.get('y'))
     speed = int(req.args.get('speed'))
-    plotter.go(x, y, speed)
+    plotter.speed(speed)
+    plotter.go(x, y)
     return '',200
 
 @app.route('/draw', methods=['POST'])
 def draw():
     req = flask.request
-    path = req.json['path']
     speed = int(req.json['speed'])
-    plotter.draw(path, speed=speed)
+    plotter.speed(speed)
+    path = req.json['path']
+    plotter.draw(path)
     return '',200
 
 @app.route('/clear')
