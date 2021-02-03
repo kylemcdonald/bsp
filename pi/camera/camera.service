@@ -1,0 +1,13 @@
+[Unit]
+Description=Camera Service
+
+[Service]
+User=root
+WorkingDirectory=/home/ubuntu/bsp/pi/camera/
+ExecStart=/home/ubuntu/bsp/pi/camera/camera.py
+Restart=always
+StandardOutput=syslog
+StandardError=syslog
+
+[Install]
+WantedBy=multi-user.target
