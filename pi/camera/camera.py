@@ -11,7 +11,7 @@ import flask
 from flask import Flask
 from waitress import serve
 
-gce_url = os.environ['ENDPOINT']
+gce_url = 'http://35.235.122.201:8080'
 plotter_url = 'http://localhost:8080/draw'
 jpeg_quality = 90
 
