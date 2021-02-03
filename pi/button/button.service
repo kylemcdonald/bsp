@@ -1,9 +1,9 @@
 [Unit]
-Description=Shutdown Service
+Description=Button Service
 
 [Service]
 User=root
-ExecStart=/home/ubuntu/bsp/pi/shutdown/shutdown.py
+ExecStart=/home/ubuntu/bsp/pi/button/button.py
 Restart=always
 
 [Install]

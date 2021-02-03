@@ -20,7 +20,6 @@ except StopIteration:
 
 import sys
 def log(*args):
-    # dt = datetime.datetime.now().replace(microsecond=0)
     print(*args)
     sys.stdout.flush()
 
@@ -133,6 +132,12 @@ def go():
     plotter.go(x, y)
     return '',200
 
+@app.route('/home')
+def home():
+    plotter.speed(99)
+    plotter.go(5000, 5000)
+    return '',200
+
 @app.route('/draw', methods=['POST'])
 def draw():
     req = flask.request
@@ -149,7 +154,10 @@ def clear():
 
 @app.route('/button')	
 def button():
-    log('button> pressed')	
+    log('button> pressed')
+    data = flask.request.json
+    if data is not None:
+        log(data)
     return '',200
 
 serve(app, listen='*:8080')

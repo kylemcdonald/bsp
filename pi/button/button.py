@@ -3,6 +3,7 @@ import time
 import datetime
 from gpiozero import InputDevice, LED
 import subprocess
+import requests
 
 button_pin = 3
 led_pin = 4
@@ -17,13 +18,12 @@ led.on()
 def button_hold(now, seconds):
     if seconds > 3:
         led.blink(.05, .5)
+        requests.get('http://localhost:8080/home')
+        time.sleep(2)
         subprocess.call(['shutdown', '-h', 'now'], shell=False)
     
 def button_release(now, seconds):
-    # if seconds > 3:
-    #     print('rebooting')
-    #     exit()
-    pass
+    requests.get('http://localhost:8080/button')
 
 while True:
     cur_active = button.is_active
