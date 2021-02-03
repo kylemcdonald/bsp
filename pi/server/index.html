@@ -105,8 +105,9 @@
 
 <body>
   <div>
-    <button onclick="fetch('/go?x=0&y=0&speed=90')">Home</button>
-    <button onclick="fetch('/go?x=10000&y=10000&speed=90')">Limit</button>
+    <button onclick="fetch('/go?x=0&y=0&speed=90')">Min</button>
+    <button onclick="fetch('/go?x=5000&y=5000&speed=90')">Home</button>
+    <button onclick="fetch('/go?x=10000&y=10000&speed=90')">Max</button>
   </div>
   <div>
     <input type="range" min="4" max="4096" value="100" id="circle-n" oninput="circleClick()" />
