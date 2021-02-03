@@ -7,6 +7,7 @@ import queue
 import struct
 from enum import Enum, auto
 
+import requests
 import numpy as np
 import flask
 from flask import Flask
@@ -14,6 +15,7 @@ from waitress import serve
 
 xlim = 10000
 ylim = 10000
+camera_url = 'http://localhost:8081/shutter'
 
 from serial.tools import list_ports
 try:
@@ -185,6 +187,7 @@ def stop():
 @app.route('/shutter')
 def shutter():
     log('shutter> pressed')
+    requests.get(camera_url)
     return '',200
 
 @app.route('/button')
