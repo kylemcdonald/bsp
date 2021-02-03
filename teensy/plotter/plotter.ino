@@ -4,7 +4,45 @@
 #include <SPI.h>
 
 #include "src/AccelStepper/AccelStepper.h"
-#include "src/ByteBuffer/ByteBuffer.h"
+
+template <class T>
+class Ring {
+    T* buffer;
+    unsigned int max_size = 0;
+    unsigned int begin = 0;
+    unsigned int length = 0;
+public:
+    Ring(unsigned int max_size) {
+        this->max_size = max_size;
+        this->buffer = new T [max_size];
+    }
+    void push_back(const T& value) {
+        if (length == max_size) {
+            return;
+        }
+        unsigned int end = begin + length;
+        if (end >= max_size) {
+            end -= max_size;
+        }
+        buffer[end] = value;
+        length++;
+    }
+    T pop_front() {
+        const T value = buffer[begin];
+        length--;
+        begin++;
+        if (begin == max_size) {
+            begin = 0;
+        }
+        return value;
+    }
+    unsigned int size() const {
+        return length;
+    }
+    void clear() {
+        length = 0;
+    }
+};
 
 // settings
 const int spoonSize = 512;
@@ -35,16 +73,12 @@ String Xrecieved = "";
 String Yrecieved = "";
 String MSrecieved = "";
 
-ByteBuffer Xbuffer; // X position buffer
-ByteBuffer Ybuffer; // Y position buffer
-ByteBuffer MSbuffer; // MS = Movement Speed buffer
+Ring<int> Xbuffer(bufferSize); // X position buffer
+Ring<int> Ybuffer(bufferSize); // Y position buffer
+Ring<int> MSbuffer(bufferSize); // MS = Movement Speed buffer
 
 void setup()
 {
-    Xbuffer.init(bufferSize);
-    Ybuffer.init(bufferSize);
-    MSbuffer.init(bufferSize);
-
     Serial.begin(115200);
 
     stepperX.setCurrentPosition(initialX);
@@ -89,7 +123,7 @@ void loop()
             Xrecieved += ((inputString.charAt(4)));
 
             const int xt = Xrecieved.toInt();
-            Xbuffer.putInt(xt);
+            Xbuffer.push_back(xt);
 
             // grabbing the Y AXIS TARGET
             Yrecieved += ((inputString.charAt(5)));
@@ -99,18 +133,18 @@ void loop()
             Yrecieved += ((inputString.charAt(9)));
 
             const int yt = Yrecieved.toInt();
-            Ybuffer.putInt(yt);
+            Ybuffer.push_back(yt);
 
             // grabbing the MOVEMENT SPEED NUMBERS
             MSrecieved += ((inputString.charAt(10)));
             MSrecieved += ((inputString.charAt(11)));
 
             const int mst = MSrecieved.toInt();
-            MSbuffer.putInt(mst);
+            MSbuffer.push_back(mst);
 
             // readCount++;
             // if (readCount == spoonSize) {
-            //     Serial.println(Xbuffer.getSize());
+            //     Serial.println(Xbuffer.size());
             //     readCount = 0;
             // }
 
@@ -125,14 +159,14 @@ void loop()
     if (GO == true) {
 
         if (((abs(stepperX.distanceToGo())) < (smoothing)) && ((abs(stepperY.distanceToGo())) < (smoothing))) {
-            if (Xbuffer.getSize() > 0) {
-                Xtarget = Xbuffer.getInt();
+            if (Xbuffer.size() > 0) {
+                Xtarget = Xbuffer.pop_front();
             }
-            if (Ybuffer.getSize() > 0) {
-                Ytarget = Ybuffer.getInt();
+            if (Ybuffer.size() > 0) {
+                Ytarget = Ybuffer.pop_front();
             }
-            if (MSbuffer.getSize() > 0) {
-                speedDiv = MSbuffer.getInt();
+            if (MSbuffer.size() > 0) {
+                speedDiv = MSbuffer.pop_front();
             }
 
             // clamp targets
