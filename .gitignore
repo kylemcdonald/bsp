@@ -3,6 +3,7 @@
 *.json
 *.geojson
 *.pyc
+*.hex
 
 .ipynb_checkpoints
 .vscode

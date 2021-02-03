@@ -78,6 +78,12 @@ cd teensy_loader_cli
 make
 ```
 
+To push a .hex file to the Teensy, run this command and press the reset button (in either order):
+
+```
+sudo ./teensy_loader_cli --mcu=TEENSY41 -w -v plotter.ino.TEENSY41.hex
+```
+
 ## Niceness
 
 Install Avahi to allow `.local` access: `sudo apt install avahi-daemon`
