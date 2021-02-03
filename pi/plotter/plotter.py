@@ -1,16 +1,19 @@
 #!/usr/bin/python3
 import serial
 import warnings
-import datetime
 import threading
 import time
 import queue
 import struct
 from enum import Enum, auto
 
+import numpy as np
 import flask
 from flask import Flask
 from waitress import serve
+
+xlim = 10000
+ylim = 10000
 
 from serial.tools import list_ports
 try:
@@ -35,9 +38,15 @@ class FakeSerial:
         log('serial> write', msg)
         
     def read(self):
-        time.sleep(1)
-        log('serial> read A')
-        return 'A'
+        return b''
+
+# normalize a set of points to xlim
+def normalize(x, limit):
+    x = np.asarray(x).astype(float)
+    x -= x.min(0)
+    x *= limit / x.max()
+    x += (limit - x.max(0)) / 2
+    return x
     
 def clamp_and_round(x, name, min_value=None, max_value=None):
     if min_value is not None and x < min_value:
@@ -72,7 +81,7 @@ class Plotter(threading.Thread):
     def home(self):
         self.speed(99)
         self.going_home = True
-        self.go(5000, 5000)
+        self.go(xlim/2, ylim/2)
         
     def stop(self):
         log('plotter> stop')
@@ -150,9 +159,21 @@ def home():
 @app.route('/draw', methods=['POST'])
 def draw():
     req = flask.request
-    speed = int(req.json['speed'])
-    plotter.speed(speed)
     path = req.json['path']
+    log(f'draw> path {len(path)} points')
+    speed = 99
+    raw = False
+    try:
+        speed = int(req.json['speed'])
+    except KeyError:
+        pass
+    try:
+        raw = req.json['raw']
+    except KeyError:
+        pass
+    if not raw:
+        path = normalize(path, (xlim, ylim))
+    plotter.speed(speed)
     plotter.draw(path)
     return '',200
 
@@ -161,12 +182,12 @@ def stop():
     plotter.stop()
     return '',200
 
-@app.route('/shutter')	
+@app.route('/shutter')
 def shutter():
     log('shutter> pressed')
     return '',200
 
-@app.route('/button')	
+@app.route('/button')
 def button():
     log('button> pressed')
     if plotter.state == State.HOME:
