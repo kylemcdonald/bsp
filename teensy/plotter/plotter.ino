@@ -7,7 +7,6 @@
 #include "src/AccelStepper/AccelStepper.h"
 
 // settings
-const int spoonSize = 512;
 const int smoothing = 180;
 const long baseSpeed = 6000; // base max speed
 const int acceleration = 11000; // max acceleration in steps per second per second
@@ -23,9 +22,7 @@ AccelStepper stepperX(1, 4, 5); // (a,b,c) a== type of motor, b & c are pin assi
 
 String inputString = ""; // a string to hold incoming data
 String arg = "";
-boolean GO = false;
-
-int readCount = 0;
+boolean running = false;
 
 short Xtarget = 0;
 short Ytarget = 0;
@@ -77,11 +74,11 @@ void loop()
             maxSpeed = (baseSpeed * speedPct) / 99;
             inputString = "";
         } else if (inChar == 'p') { // 'p' pauses
-            GO = false;
+            running = false;
             buffer.clear();
             inputString = "";
         } else if (inChar == 'g') { // 'g' goes to point
-            GO = true;
+            running = true;
             Point point;
             arg = "";
             arg += inputString.charAt(0);
@@ -99,18 +96,12 @@ void loop()
             point.y = arg.toInt();
             buffer.push_back(point);
             inputString = "";
-
-            // readCount++;
-            // if (readCount == spoonSize) {
-            //     Serial.println(buffer.size());
-            //     readCount = 0;
-            // }
         }
     }
 
-    if (GO == true) {
+    if (running == true) {
 
-        if (((abs(stepperX.distanceToGo())) < (smoothing)) && ((abs(stepperY.distanceToGo())) < (smoothing))) {
+        if (((abs(stepperX.distanceToGo())) < smoothing) && ((abs(stepperY.distanceToGo())) < smoothing)) {
 
             // update if we can
             if (buffer.size() > 0) {

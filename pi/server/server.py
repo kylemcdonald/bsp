@@ -107,18 +107,6 @@ class Plotter(threading.Thread):
                 for i in range(self.spoon_size):
                     msg = self.queue.get(timeout=1)
                     self.ser.write(msg.encode('ascii'))
-                try:
-                    while True:
-                        # after sending messages, wait for a response
-                        response = self.ser.read()
-                        if len(response) == 0:
-                            # log(f'plotter> no response')
-                            break
-                        log(f'plotter> buffer usage {repr(response)}')
-                except serial.SerialTimeoutException:
-                    # if we get a timeout waiting for a message,
-                    # move on to the next loop
-                    warnings.warn(f'{self.ser.timeout}s timeout')
             except queue.Empty:
                 # log('plotter> no messages')
                 pass
