@@ -1,0 +1,13 @@
+[Unit]
+Description=Server Service
+
+[Service]
+User=root
+WorkingDirectory=/home/kyle/bsp/gce/
+ExecStart=/home/kyle/bsp/gce/server.py
+Restart=always
+StandardOutput=syslog
+StandardError=syslog
+
+[Install]
+WantedBy=multi-user.target

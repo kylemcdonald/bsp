@@ -1,18 +1,35 @@
+#!/usr/bin/python3
 import flask
 from flask import Flask, jsonify, request
 from waitress import serve
 
+import datetime
+import os
 import json
 import io
 import cld_mst as process_cld
 from PIL import Image
 
+import sys
+def log(*args):
+    print(*args)
+    sys.stdout.flush()
+
+def save_to_disk(data, directory, extension):
+    now = datetime.datetime.now()
+    os.makedirs(directory, exist_ok=True)
+    fn = now.replace(microsecond=0).isoformat() + extension
+    fn = fn.replace(':', '-')
+    fn = os.path.join(directory, fn)
+    with open(fn, 'wb') as f:
+        f.write(data)
+
 app = Flask(__name__)
 
 @app.route('/', methods=['POST'])
 def index():
-    with open('img.jpg', 'wb') as f:
-        f.write(request.get_data())
+    data = request.get_data()
+    save_to_disk(data, 'images', '.jpg')
 
     with open('result.json', 'r') as f:
         ret = json.load(f)
