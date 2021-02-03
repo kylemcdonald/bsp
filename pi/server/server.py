@@ -76,7 +76,7 @@ class Plotter(threading.Thread):
         log('plotter> clear')
         with self.queue.mutex:
             self.queue.queue.clear() 
-            self.queue.put('s')
+        self.queue.put('s')
         
     def go(self, x, y, speed=50):
         x = clamp_and_round(x, 'x', 0)
