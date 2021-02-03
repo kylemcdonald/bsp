@@ -51,6 +51,12 @@ void setup()
     // points[1] = 1;
 }
 
+void done()
+{
+    Serial.print('e');
+    running = false;
+}
+
 void loop()
 {
     stepperX.run();
@@ -66,17 +72,18 @@ void loop()
 
         if (isDigit(inChar)) {
             inputString += inChar;
-        } else if (inChar == 's') { // 's' sets the speed
+            continue;
+        }
+        
+        if (inChar == 's') { // 's' sets the speed
             arg = "";
             arg += inputString.charAt(0);
             arg += inputString.charAt(1);
             const long speedPct = arg.toInt();
             maxSpeed = (baseSpeed * speedPct) / 99;
-            inputString = "";
         } else if (inChar == 'p') { // 'p' pauses
-            running = false;
+            done();
             buffer.clear();
-            inputString = "";
         } else if (inChar == 'g') { // 'g' goes to point
             running = true;
             Point point;
@@ -95,8 +102,8 @@ void loop()
             arg += inputString.charAt(9);
             point.y = arg.toInt();
             buffer.push_back(point);
-            inputString = "";
         }
+        inputString = "";
     }
 
     if (running == true) {
@@ -110,8 +117,7 @@ void loop()
                 Ytarget = point.y;
             } else {
                 // otherwise we are done
-                Serial.print('e');
-                running = false;
+                done();
                 return;
             }
 

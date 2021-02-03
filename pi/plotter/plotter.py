@@ -6,6 +6,7 @@ import threading
 import time
 import queue
 import struct
+from enum import Enum, auto
 
 import flask
 from flask import Flask
@@ -17,6 +18,8 @@ try:
     port = port.device
 except StopIteration:
     port = None
+
+State = Enum('State', 'HOME DRAWING POSTDRAW')
 
 import sys
 def log(*args):
@@ -62,10 +65,17 @@ class Plotter(threading.Thread):
         self.ready = True
         self.queue = queue.Queue()
         self.shutdown = threading.Event()
+        self.going_home = False
+        self.state = State.HOME
         self.start()
+
+    def home(self):
+        self.speed(99)
+        self.going_home = True
+        self.go(5000, 5000)
         
-    def clear(self):
-        log('plotter> clear')
+    def stop(self):
+        log('plotter> stop')
         with self.queue.mutex:
             self.queue.queue.clear() 
         self.queue.put('p')
@@ -78,6 +88,7 @@ class Plotter(threading.Thread):
         x = clamp_and_round(x, 'x', 0)
         y = clamp_and_round(y, 'y', 0)
         self.queue.put(f'{x:05d}{y:05d}g')
+        self.state = State.DRAWING
         
     def draw(self, path, **args):
         for point in path:
@@ -92,10 +103,7 @@ class Plotter(threading.Thread):
         while not self.shutdown.is_set():
             time.sleep(0.01)
             try:
-                # send (up to) spoon_size messages, if available
                 qsize = self.queue.qsize()
-                # if qsize > 0:
-                #     log(f'plotter> remaining to send {qsize}')
                 for i in range(self.spoon_size):
                     msg = self.queue.get(timeout=1)
                     self.ser.write(msg.encode('ascii'))
@@ -107,7 +115,9 @@ class Plotter(threading.Thread):
                 if len(msg) == 0:
                     continue
                 if msg == b'e':
-                    log('plotter> finshed')
+                    log('plotter> finished')
+                    self.state = State.HOME if self.going_home else State.POSTDRAW
+                    self.going_home = False
                 else:
                     log(f'plotter> unknown message {repr(msg)}')
             except serial.SerialTimeoutException:
@@ -134,8 +144,7 @@ def go():
 
 @app.route('/home')
 def home():
-    plotter.speed(99)
-    plotter.go(5000, 5000)
+    plotter.home()
     return '',200
 
 @app.route('/draw', methods=['POST'])
@@ -147,18 +156,30 @@ def draw():
     plotter.draw(path)
     return '',200
 
-@app.route('/clear')
-def clear():
-    plotter.clear()
+@app.route('/stop')
+def stop():
+    plotter.stop()
+    return '',200
+
+@app.route('/shutter')	
+def shutter():
+    log('shutter> pressed')
     return '',200
 
 @app.route('/button')	
 def button():
     log('button> pressed')
-    data = flask.request.json
-    if data is not None:
-        log(data)
+    if plotter.state == State.HOME:
+        shutter()
+    elif plotter.state == State.DRAWING:
+        stop()
+    elif plotter.state == State.POSTDRAW:
+        home()
     return '',200
+
+@app.route('/status')	
+def status():
+    return {'state': plotter.state.name}
 
 serve(app, listen='*:8080')
 plotter.join()
