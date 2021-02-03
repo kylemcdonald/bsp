@@ -105,7 +105,10 @@
 
 <body>
   <div>
-    <button onclick="fetch('/go?x=0&y=0')">Go to 0,0</button>
+    <button onclick="fetch('/go?x=0&y=0&speed=90')">Home</button>
+    <button onclick="fetch('/go?x=10000&y=10000&speed=90')">Limit</button>
+  </div>
+  <div>
     <button onclick="fetch('/jog?x=+1&y=0')">Jog +1,0</button>
     <button onclick="fetch('/jog?x=-1&y=0')">Jog -1,0</button>
     <button onclick="fetch('/jog?x=0&y=+1')">Jog 0,+1</button>

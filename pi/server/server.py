@@ -6,17 +6,20 @@ import threading
 import time
 import queue
 
-from gpiozero import LED
 import flask
 from flask import Flask
 from waitress import serve
 
-led = LED(4)
-led.on()
+try:
+    from gpiozero import LED
+    led = LED(4)
+    led.on()
+except ModuleNotFoundError:
+    pass
 
 from serial.tools import list_ports
 try:
-    port = next(list_ports.grep('USB'))
+    port = next(list_ports.grep('USB Serial'))
     port = port.device
 except StopIteration:
     port = None
@@ -85,7 +88,7 @@ class Plotter(threading.Thread):
         x = clamp_and_round(x, 'x', 0)
         y = clamp_and_round(y, 'y', 0)
         speed = clamp_and_round(speed, 'speed', 1, 99)
-        self.queue.put(f'{smooth:d}{x:05d}{y:05d}000099{speed:02d}g')
+        self.queue.put(f'{smooth:d}{x:05d}{y:05d}{speed:02d}g')
         
     def draw(self, path, **args):
         for point in path:
@@ -150,7 +153,8 @@ def go():
     req = flask.request
     x = int(req.args.get('x'))
     y = int(req.args.get('y'))
-    plotter.go(x, y)
+    speed = int(req.args.get('speed'))
+    plotter.go(x, y, speed)
     return '',200
 
 @app.route('/draw', methods=['POST'])

@@ -5,6 +5,7 @@
 *.pyc
 
 .ipynb_checkpoints
+.vscode
 
 potrace
 cld
