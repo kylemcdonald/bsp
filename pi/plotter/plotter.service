@@ -1,10 +1,10 @@
 [Unit]
-Description=Server Service
+Description=Plotter Service
 
 [Service]
 User=root
-WorkingDirectory=/home/ubuntu/bsp/pi/server/
-ExecStart=/home/ubuntu/bsp/pi/server/server.py
+WorkingDirectory=/home/ubuntu/bsp/pi/plotter/
+ExecStart=/home/ubuntu/bsp/pi/plotter/plotter.py
 Restart=always
 StandardOutput=syslog
 StandardError=syslog

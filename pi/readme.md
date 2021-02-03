@@ -31,18 +31,18 @@ sudo pip3 install \
 
 Enable gpio permissions [for all users](https://github.com/gpiozero/gpiozero/issues/837#issuecomment-703743142): `sudo chmod og+rwx /dev/gpio*`.
 
-Setup the shutdown script:
+Setup the shutdown service:
 
 ```
 cd ~/bsp/pi/shutdown
 bash install-shutdown.sh
 ```
 
-Setup the server script:
+Setup the plotter service:
 
 ```
-cd ~/bsp/pi/server
-bash install-server.sh
+cd ~/bsp/pi/plotter
+bash install-plotter.sh
 ```
 
 ## Remote access

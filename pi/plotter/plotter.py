@@ -11,13 +11,6 @@ import flask
 from flask import Flask
 from waitress import serve
 
-try:
-    from gpiozero import LED
-    led = LED(4)
-    led.on()
-except ModuleNotFoundError:
-    pass
-
 from serial.tools import list_ports
 try:
     port = next(list_ports.grep('USB Serial'))
@@ -142,11 +135,6 @@ def draw():
 @app.route('/clear')
 def clear():
     plotter.clear()
-    return '',200
-
-@app.route('/button')
-def button():
-    log('button> pressed')
     return '',200
 
 serve(app, listen='*:8080')
