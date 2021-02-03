@@ -109,13 +109,7 @@
     <button onclick="fetch('/go?x=10000&y=10000&speed=90')">Limit</button>
   </div>
   <div>
-    <button onclick="fetch('/jog?x=+1&y=0')">Jog +1,0</button>
-    <button onclick="fetch('/jog?x=-1&y=0')">Jog -1,0</button>
-    <button onclick="fetch('/jog?x=0&y=+1')">Jog 0,+1</button>
-    <button onclick="fetch('/jog?x=0&y=-1')">Jog 0,-1</button>
-  </div>
-  <div>
-    <input type="range" min="4" max="500" value="100" id="circle-n" oninput="circleClick()" />
+    <input type="range" min="4" max="4096" value="100" id="circle-n" oninput="circleClick()" />
     <input type="range" min="10" max="200" value="150" id="circle-r" oninput="circleClick()" />
     Circle
   </div>
