@@ -108,6 +108,11 @@ void loop()
                 Point point = buffer.pop_front();
                 Xtarget = point.x;
                 Ytarget = point.y;
+            } else {
+                // otherwise we are done
+                Serial.print('e');
+                running = false;
+                return;
             }
 
             // clamp targets
