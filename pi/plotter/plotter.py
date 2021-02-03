@@ -147,5 +147,10 @@ def clear():
     plotter.clear()
     return '',200
 
+@app.route('/button')	
+def button():
+    log('button> pressed')	
+    return '',200
+
 serve(app, listen='*:8080')
 plotter.join()
