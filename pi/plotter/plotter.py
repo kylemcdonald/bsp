@@ -103,6 +103,16 @@ class Plotter(threading.Thread):
             except queue.Empty:
                 # log('plotter> no messages')
                 pass
+            try:
+                msg = self.ser.read()
+                if len(msg) == 0:
+                    continue
+                if msg == b'e':
+                    log('plotter> finshed')
+                else:
+                    log(f'plotter> unknown message {repr(msg)}')
+            except serial.SerialTimeoutException:
+                log('plotter> timeout')
         log('plotter> received shutdown')
 
 app = Flask(__name__)
