@@ -21,9 +21,11 @@ try:
 except StopIteration:
     port = None
 
+import sys
 def log(*args):
-    dt = datetime.datetime.now().replace(microsecond=0)
-    print(dt, *args)
+    # dt = datetime.datetime.now().replace(microsecond=0)
+    print(*args)
+    sys.stdout.flush()
 
 class FakeSerial:
     def __init__(self, timeout):

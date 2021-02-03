@@ -6,6 +6,8 @@ User=root
 WorkingDirectory=/home/ubuntu/bsp/pi/server/
 ExecStart=/home/ubuntu/bsp/pi/server/server.py
 Restart=always
+StandardOutput=syslog
+StandardError=syslog
 
 [Install]
 WantedBy=multi-user.target
