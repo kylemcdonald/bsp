@@ -4,7 +4,45 @@
 #include <SPI.h>
 
 #include "src/AccelStepper/AccelStepper.h"
-#include "src/ByteBuffer/ByteBuffer.h"
+
+template <class T>
+class Ring {
+    T* buffer;
+    unsigned int max_size = 0;
+    unsigned int begin = 0;
+    unsigned int length = 0;
+public:
+    Ring(unsigned int max_size) {
+        this->max_size = max_size;
+        this->buffer = new T [max_size];
+    }
+    void push_back(const T& value) {
+        if (length == max_size) {
+            return;
+        }
+        unsigned int end = begin + length;
+        if (end >= max_size) {
+            end -= max_size;
+        }
+        buffer[end] = value;
+        length++;
+    }
+    T pop_front() {
+        const T value = buffer[begin];
+        length--;
+        begin++;
+        if (begin == max_size) {
+            begin = 0;
+        }
+        return value;
+    }
+    unsigned int size() const {
+        return length;
+    }
+    void clear() {
+        length = 0;
+    }
+};
 
 // settings
 const int spoonSize = 512;
@@ -15,18 +53,14 @@ const int Xlimit = 10000; // set max steps in X axis // 2021.01.27 using 400 ste
 const int Ylimit = 10000; // set max steps in Y axis // 2021.01.27 using 400 steps per revolution step driver setting. // this is roughly 90% full travel of the physical axis.
 const int bufferScale = 6;
 const int bufferSize = 256 * (1 << bufferScale);
-
-// this is the home position. on startup we assume this is where we are.
-unsigned int positionX = 0;
-unsigned int positionY = 0;
+const int initialX = 5000;
+const int initialY = 5000;
 
 // declare and initialize variables used throughout the code
 AccelStepper stepperY(1, 2, 3); // (a,b,c) a== type of motor, b & c are pin assignments//1 for a = stepper driver. (ZACH NEEDS a=1)
 AccelStepper stepperX(1, 4, 5); // (a,b,c) a== type of motor, b & c are pin assignments//1 for a = stepper driver. (ZACH NEEDS a=1)
 
 int speedDiv = 100;
-int XYmax = 0; // also XY max speed but used after XYmaxSpeed is multiplied by (speedDiv/100)
-
 String inputString = ""; // a string to hold incoming data
 boolean GO = false;
 
@@ -35,27 +69,20 @@ int readCount = 0;
 int Xtarget = 0;
 int Ytarget = 0;
 
-int xt = 0;
-int yt = 0;
-int mst = 0;
-
 String Xrecieved = "";
 String Yrecieved = "";
 String MSrecieved = "";
 
-char character;
-
-ByteBuffer Xbuffer; // X position buffer
-ByteBuffer Ybuffer; // Y position buffer
-ByteBuffer MSbuffer; // MS = Movement Speed buffer
+Ring<int> Xbuffer(bufferSize); // X position buffer
+Ring<int> Ybuffer(bufferSize); // Y position buffer
+Ring<int> MSbuffer(bufferSize); // MS = Movement Speed buffer
 
 void setup()
 {
-    Xbuffer.init(bufferSize);
-    Ybuffer.init(bufferSize);
-    MSbuffer.init(bufferSize);
-
     Serial.begin(115200);
+
+    stepperX.setCurrentPosition(initialX);
+    stepperY.setCurrentPosition(initialY);
 
     stepperX.setMaxSpeed(XYmaxSpeed); // 450
     stepperX.setAcceleration(XYaccell); //ACCELLERATION IN STEPS PER SECOND PER SECOND
@@ -69,64 +96,57 @@ void loop()
     stepperX.run();
     stepperY.run();
 
+    // read all the serial data that is available
     while (Serial.available()) {
-        volatile long inChar = Serial.read();
-        if (isDigit(inChar)) {
-            inputString += (char)inChar;
-        }
+        const char inChar = Serial.read();
+    
+        // continue calling run() while reading
+        stepperX.run();
+        stepperY.run();
 
-        if (inChar == 's') { // lowercase 's' is the code for stop or pause
+        if (isDigit(inChar)) {
+            inputString += inChar;
+        } else if (inChar == 's') { // lowercase 's' is the code for stop or pause
             GO = false;
             Xbuffer.clear();
             Ybuffer.clear();
             MSbuffer.clear();
             inputString = "";
-        }
+        } else if (inChar == 'g') { // A 'g' comes after a movement comand
+            GO = true;
 
-        if (inChar == 'g') { // A 'g' comes after a movement comand
-            if (inputString.toInt() != 0) { //2021.01.15**
-                GO = true;
+            // grabbing the X AXIS TARGET
+            Xrecieved += ((inputString.charAt(0)));
+            Xrecieved += ((inputString.charAt(1)));
+            Xrecieved += ((inputString.charAt(2)));
+            Xrecieved += ((inputString.charAt(3)));
+            Xrecieved += ((inputString.charAt(4)));
 
-                // grabbing the X AXIS TARGET //
-                Xrecieved += ((inputString.charAt(0)));
-                Xrecieved += ((inputString.charAt(1)));
-                Xrecieved += ((inputString.charAt(2)));
-                Xrecieved += ((inputString.charAt(3)));
-                Xrecieved += ((inputString.charAt(4)));
+            const int xt = Xrecieved.toInt();
+            Xbuffer.push_back(xt);
 
-                //Xtarget = Xrecieved.toInt();
-                xt = Xrecieved.toInt();
-                Xbuffer.putLong(xt); // put the value into the buffer
+            // grabbing the Y AXIS TARGET
+            Yrecieved += ((inputString.charAt(5)));
+            Yrecieved += ((inputString.charAt(6)));
+            Yrecieved += ((inputString.charAt(7)));
+            Yrecieved += ((inputString.charAt(8)));
+            Yrecieved += ((inputString.charAt(9)));
 
-                // grabbing the Y AXIS TARGET //
-                Yrecieved += ((inputString.charAt(5)));
-                Yrecieved += ((inputString.charAt(6)));
-                Yrecieved += ((inputString.charAt(7)));
-                Yrecieved += ((inputString.charAt(8)));
-                Yrecieved += ((inputString.charAt(9)));
+            const int yt = Yrecieved.toInt();
+            Ybuffer.push_back(yt);
 
-                //Ytarget = Yrecieved.toInt();
-                yt = Yrecieved.toInt();
-                Ybuffer.putLong(yt); // put the value into the buffer
+            // grabbing the MOVEMENT SPEED NUMBERS
+            MSrecieved += ((inputString.charAt(10)));
+            MSrecieved += ((inputString.charAt(11)));
 
-                // grabbing the MOVEMENT SPEED NUMBERS //
-                MSrecieved += ((inputString.charAt(10)));
-                MSrecieved += ((inputString.charAt(11)));
+            const int mst = MSrecieved.toInt();
+            MSbuffer.push_back(mst);
 
-                mst = MSrecieved.toInt();
-                MSbuffer.putLong(mst); // put the value into the buffer
-
-                stepperX.run();
-                stepperY.run();
-
-                readCount++;
-
-                if (readCount == spoonSize) {
-                    const unsigned short bufferUsage = Xbuffer.getSize() >> bufferScale;
-                    Serial.write(bufferUsage);
-                    readCount = 0;
-                }
-            }
+            // readCount++;
+            // if (readCount == spoonSize) {
+            //     Serial.println(Xbuffer.size());
+            //     readCount = 0;
+            // }
 
             // clear the string for new input:
             inputString = "";
@@ -139,14 +159,14 @@ void loop()
     if (GO == true) {
 
         if (((abs(stepperX.distanceToGo())) < (smoothing)) && ((abs(stepperY.distanceToGo())) < (smoothing))) {
-            if (Xbuffer.getSize() > 0) {
-                Xtarget = Xbuffer.getLong(); // getInt was giving me trouble
+            if (Xbuffer.size() > 0) {
+                Xtarget = Xbuffer.pop_front();
             }
-            if (Ybuffer.getSize() > 0) {
-                Ytarget = Ybuffer.getLong(); // getInt was giving me trouble
+            if (Ybuffer.size() > 0) {
+                Ytarget = Ybuffer.pop_front();
             }
-            if (MSbuffer.getSize() > 0) {
-                speedDiv = MSbuffer.getLong(); // Movement Speed
+            if (MSbuffer.size() > 0) {
+                speedDiv = MSbuffer.pop_front();
             }
 
             // clamp targets
@@ -167,12 +187,12 @@ void loop()
             // We are controlling the 'speed' of the machine motion by setting the MAX speed. The machine can always move below that setting.
 
             if (speedDiv < 100) {
-                XYmax = int((XYmaxSpeed / ((100 / speedDiv))));
+                const int XYmax = int((XYmaxSpeed / ((100 / speedDiv))));
 
                 stepperX.setMaxSpeed(XYmax); // 400
                 stepperY.setMaxSpeed(XYmax); // 400
             } else if (speedDiv >= 100) {
-                XYmax = int(((XYmaxSpeed * (speedDiv / 100))));
+                const int XYmax = int(((XYmaxSpeed * (speedDiv / 100))));
 
                 stepperX.setMaxSpeed(XYmax); // 400
                 stepperY.setMaxSpeed(XYmax); // 400
@@ -185,7 +205,4 @@ void loop()
             stepperY.run();
         }
     }
-
-    stepperX.run();
-    stepperY.run();
 }
