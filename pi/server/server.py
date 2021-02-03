@@ -5,18 +5,22 @@ import datetime
 import threading
 import time
 import queue
+import struct
 
-from gpiozero import LED
 import flask
 from flask import Flask
 from waitress import serve
 
-led = LED(4)
-led.on()
+try:
+    from gpiozero import LED
+    led = LED(4)
+    led.on()
+except ModuleNotFoundError:
+    pass
 
 from serial.tools import list_ports
 try:
-    port = next(list_ports.grep('USB'))
+    port = next(list_ports.grep('USB Serial'))
     port = port.device
 except StopIteration:
     port = None
@@ -54,7 +58,7 @@ def chunks(x, n):
         yield x[i:i+n]
 
 class Plotter(threading.Thread):
-    def __init__(self, port=None, baudrate=115200, timeout=3, spoon_size=15):
+    def __init__(self, port=None, baudrate=115200, timeout=0, spoon_size=512):
         super().__init__()
         if port is None:
             log('no serial port available')
@@ -72,22 +76,13 @@ class Plotter(threading.Thread):
         log('plotter> clear')
         with self.queue.mutex:
             self.queue.queue.clear() 
+            self.queue.put('s')
         
-    def jog(self, x=None, y=None):
-        if x is not None and x != 0:
-            key = 'X' if x > 0 else 'x'
-            amt = int(abs(x))
-            self.queue.put(f'{amt}{key}')
-        if y is not None and y != 0:
-            key = 'Y' if y > 0 else 'y'
-            amt = int(abs(y))
-            self.queue.put(f'{amt}{key}')
-
-    def go(self, x, y, speed=50, smooth=True):
+    def go(self, x, y, speed=50):
         x = clamp_and_round(x, 'x', 0)
         y = clamp_and_round(y, 'y', 0)
         speed = clamp_and_round(speed, 'speed', 1, 99)
-        self.queue.put(f'{smooth:d}{x:05d}{y:05d}000099{speed:02d}g')
+        self.queue.put(f'{x:05d}{y:05d}{speed:02d}g')
         
     def draw(self, path, **args):
         for point in path:
@@ -98,34 +93,30 @@ class Plotter(threading.Thread):
         self.shutdown.set()
         super().join()
         
-    # this logic is not ideal:
-    # - this will not fill the teensy buffer if spoon_size == 'A' modulo.
-    #   it will just keep hitting empty.
-    # - it can take up to `timeout` waiting for ser.read() until new
-    #   messages are sent. `timeout` should be slightly longer than
-    #   the amount of time it takes the teensy buffer to go from full to
-    #   half full.
-    # - the shutdown event will be ignored until a spoon is finished.
     def run(self):
         while not self.shutdown.is_set():
+            time.sleep(0.01)
             try:
-                time.sleep(0.3)
                 # send (up to) spoon_size messages, if available
+                qsize = self.queue.qsize()
+                # if qsize > 0:
+                #     log(f'plotter> remaining to send {qsize}')
                 for i in range(self.spoon_size):
                     msg = self.queue.get(timeout=1)
                     self.ser.write(msg.encode('ascii'))
-                try:
-                    # after sending messages, wait for a response
-                    response = self.ser.read()
-                    if response in [b'A', b'\r', b'\n']:
-                        log(f'plotter> received {repr(response)}')
-                        continue
-                    warning = f'{datetime.datetime.now()} unexpected response "{response}"'
-                    warnings.warn(warning)
-                except serial.SerialTimeoutException:
-                    # if we get a timeout waiting for a message,
-                    # move on to the next loop
-                    warnings.warn(f'{self.ser.timeout}s timeout')
+                # try:
+                #     while True:
+                #         # after sending messages, wait for a response
+                #         response = self.ser.read()
+                #         if len(response) == 0:
+                #             # log(f'plotter> no response')
+                #             break
+                #         buffer_usage = 100 * ord(response) / float(255)
+                #         log(f'plotter> buffer usage {buffer_usage:.1f}%')
+                # except serial.SerialTimeoutException:
+                #     # if we get a timeout waiting for a message,
+                #     # move on to the next loop
+                #     warnings.warn(f'{self.ser.timeout}s timeout')
             except queue.Empty:
                 # log('plotter> no messages')
                 pass
@@ -139,20 +130,13 @@ def index():
     with open('index.html') as f:
         return f.read()
 
-@app.route('/jog')
-def jog():
-    req = flask.request
-    x = int(req.args.get('x'))
-    y = int(req.args.get('y'))
-    plotter.jog(x, y)
-    return '',200
-
 @app.route('/go')
 def go():
     req = flask.request
     x = int(req.args.get('x'))
     y = int(req.args.get('y'))
-    plotter.go(x, y)
+    speed = int(req.args.get('speed'))
+    plotter.go(x, y, speed)
     return '',200
 
 @app.route('/draw', methods=['POST'])
