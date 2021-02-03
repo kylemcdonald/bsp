@@ -91,14 +91,6 @@ class Plotter(threading.Thread):
         self.shutdown.set()
         super().join()
         
-    # this logic is not ideal:
-    # - this will not fill the teensy buffer if spoon_size == 'A' modulo.
-    #   it will just keep hitting empty.
-    # - it can take up to `timeout` waiting for ser.read() until new
-    #   messages are sent. `timeout` should be slightly longer than
-    #   the amount of time it takes the teensy buffer to go from full to
-    #   half full.
-    # - the shutdown event will be ignored until a spoon is finished.
     def run(self):
         while not self.shutdown.is_set():
             time.sleep(0.01)
