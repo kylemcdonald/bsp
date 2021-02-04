@@ -28,11 +28,17 @@ app = Flask(__name__)
 
 @app.route('/', methods=['POST'])
 def index():
+    log('received request')
     data = request.get_data()
+
+    log('saving image', len(data), 'bytes')
     save_to_disk(data, 'images', '.jpg')
 
-    with open('result.json', 'r') as f:
+    # byapss
+    with open('sample.json', 'r') as f:
         ret = json.load(f)
+
+    log('sending response')
     return jsonify(ret)
 
     # img_bytes = io.BytesIO(request.get_data())
