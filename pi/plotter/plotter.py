@@ -13,6 +13,8 @@ import flask
 from flask import Flask
 from waitress import serve
 
+default_speed = 6000
+homing_speed = 6000
 xlim = 10000
 ylim = 10000
 camera_url = 'http://localhost:8081/shutter'
@@ -81,7 +83,7 @@ class Plotter(threading.Thread):
         self.start()
 
     def home(self):
-        self.speed(99)
+        self.speed(homing_speed)
         self.going_home = True
         self.go(xlim/2, ylim/2)
         
@@ -92,8 +94,16 @@ class Plotter(threading.Thread):
         self.queue.put('p')
 
     def speed(self, speed):
-        speed = clamp_and_round(speed, 'speed', 1, 99)
-        self.queue.put(f'{speed:02d}s')
+        speed = clamp_and_round(speed, 'speed', 1, 9999)
+        self.queue.put(f'{speed:04d}s')
+
+    def smoothing(self, smoothing):
+        smoothing = clamp_and_round(smoothing, 'speed', 1, 999)
+        self.queue.put(f'{smoothing:03d}m')
+
+    def acceleration(self, acceleration):
+        acceleration = clamp_and_round(acceleration, 'speed', 1, 99999)
+        self.queue.put(f'{acceleration:05d}a')
         
     def go(self, x, y):
         x = clamp_and_round(x, 'x', 0)
@@ -117,6 +127,7 @@ class Plotter(threading.Thread):
                 qsize = self.queue.qsize()
                 for i in range(self.spoon_size):
                     msg = self.queue.get(timeout=1)
+                    log(f'msg> {msg}')
                     self.ser.write(msg.encode('ascii'))
             except queue.Empty:
                 # log('plotter> no messages')
@@ -163,7 +174,7 @@ def draw():
     req = flask.request
     path = req.json['path']
     log(f'draw> path {len(path)} points')
-    speed = 99
+    speed = default_speed
     raw = False
     try:
         speed = int(req.json['speed'])
