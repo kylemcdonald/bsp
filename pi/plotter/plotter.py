@@ -79,6 +79,7 @@ class Plotter(threading.Thread):
         self.queue = queue.Queue()
         self.shutdown = threading.Event()
         self.going_home = False
+        self.need_to_go_home = False
         self.state = State.HOME
         self.smoothing(50)
         self.start()
@@ -90,6 +91,7 @@ class Plotter(threading.Thread):
         log('plotter> home')
         self.speed(homing_speed)
         self.going_home = True
+        self.need_to_go_home = False
         self.go(*home_position)
         
     def stop(self):
@@ -119,6 +121,7 @@ class Plotter(threading.Thread):
     def draw(self, path, **args):
         for point in path:
             self.go(*point, **args)
+        self.need_to_go_home = True
             
     def join(self):
         log('plotter> sending shutdown')
@@ -146,9 +149,10 @@ class Plotter(threading.Thread):
                     log('plotter> finished')
                     self.state = State.HOME if self.going_home else State.POSTDRAW
                     self.going_home = False
-                    # always home after finishing drawing
-                    time.sleep(4)
-                    self.home()
+                    # always home after finishing draw()
+                    if self.need_to_go_home:
+                        time.sleep(4)
+                        self.home()
                 else:
                     log(f'plotter> unknown message {repr(msg)}')
             except serial.SerialTimeoutException:
