@@ -7,9 +7,9 @@
 #include "src/AccelStepper/AccelStepper.h"
 
 // settings
-const int smoothing = 400;
-const long baseSpeed = 6000; // base max speed
-const int acceleration = 11000; // max acceleration in steps per second per second
+int smoothing = 200; // base smoothing
+int maxSpeed = 6000; // base max speed
+int acceleration = 11000; // base max acceleration in steps per second per second
 const short Xlimit = 10000; // set max steps in X axis, roughly 90% of full travel
 const short Ylimit = 10000; // set max steps in Y axis, roughly 90% of full travel
 const int bufferSize = 100000;
@@ -30,7 +30,6 @@ boolean finished = false;
 
 short Xtarget = 0;
 short Ytarget = 0;
-short maxSpeed = baseSpeed;
 
 struct Point {
     short x, y;
@@ -44,15 +43,13 @@ void setup()
     Serial.begin(115200);
 
     stepperX.setCurrentPosition(initialX);
-    stepperX.setMaxSpeed(baseSpeed);
-    stepperX.setAcceleration(acceleration);
-
     stepperY.setCurrentPosition(initialY);
-    stepperY.setMaxSpeed(baseSpeed);
-    stepperY.setAcceleration(acceleration);
 
-    // points[0] = 1;
-    // points[1] = 1;
+    stepperX.setMaxSpeed(maxSpeed);
+    stepperY.setMaxSpeed(maxSpeed);
+
+    stepperX.setAcceleration(acceleration);
+    stepperY.setAcceleration(acceleration);
 }
 
 void stopRunning() {
@@ -78,16 +75,35 @@ void loop()
             continue;
         }
         
-        if (inChar == 's') { // 's' sets the speed
+        if (inChar == 's') { // 's' sets the speed (4 digits)
             arg = "";
             arg += inputString.charAt(0);
             arg += inputString.charAt(1);
-            const long speedPct = arg.toInt();
-            maxSpeed = (baseSpeed * speedPct) / 99;
-        } else if (inChar == 'p') { // 'p' pauses
+            arg += inputString.charAt(2);
+            arg += inputString.charAt(3);
+            maxSpeed = arg.toInt();
+            stepperX.setMaxSpeed(maxSpeed);
+            stepperY.setMaxSpeed(maxSpeed);
+        } else if (inChar =='m') { // 'm' sets the smoothing (3 digits)
+            arg = "";
+            arg += inputString.charAt(0);
+            arg += inputString.charAt(1);
+            arg += inputString.charAt(2);
+            smoothing = arg.toInt();
+        } else if (inChar =='a') { // 'a' sets the acceleration (5 digits)
+            arg = "";
+            arg += inputString.charAt(0);
+            arg += inputString.charAt(1);
+            arg += inputString.charAt(2);
+            arg += inputString.charAt(3);
+            arg += inputString.charAt(4);
+            acceleration = arg.toInt();
+            stepperX.setAcceleration(acceleration);
+            stepperY.setAcceleration(acceleration);
+        } else if (inChar == 'p') { // 'p' stops (0 digits)
             stopRunning();
             buffer.clear();
-        } else if (inChar == 'g') { // 'g' goes to point
+        } else if (inChar == 'g') { // 'g' goes to point (10 digits, 5 per point)
             running = true;
             Point point;
             arg = "";
@@ -135,9 +151,6 @@ void loop()
             } else if (Ytarget < 0) {
                 Ytarget = 0;
             }
-
-            stepperX.setMaxSpeed(maxSpeed);
-            stepperY.setMaxSpeed(maxSpeed);
 
             stepperX.moveTo(Xtarget);
             stepperY.moveTo(Ytarget);
