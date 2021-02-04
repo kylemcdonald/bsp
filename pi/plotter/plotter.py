@@ -13,10 +13,10 @@ import flask
 from flask import Flask
 from waitress import serve
 
+home_position = (5000,3500)
+limit_position = (10000, 10000)
 default_speed = 6000
 homing_speed = 6000
-xlim = 10000
-ylim = 10000
 camera_url = 'http://localhost:8081/shutter'
 
 from serial.tools import list_ports
@@ -44,7 +44,7 @@ class FakeSerial:
     def read(self):
         return b''
 
-# normalize a set of points to xlim
+# normalize a set of points to limits
 def normalize(x, limit):
     x = np.asarray(x).astype(float)
     x -= x.min(0)
@@ -80,12 +80,17 @@ class Plotter(threading.Thread):
         self.shutdown = threading.Event()
         self.going_home = False
         self.state = State.HOME
+        self.smoothing(50)
         self.start()
 
     def home(self):
+        if self.state == State.HOME:
+            # already home
+            return
+        log('plotter> home')
         self.speed(homing_speed)
         self.going_home = True
-        self.go(xlim/2, ylim/2)
+        self.go(*home_position)
         
     def stop(self):
         log('plotter> stop')
@@ -127,7 +132,8 @@ class Plotter(threading.Thread):
                 qsize = self.queue.qsize()
                 for i in range(self.spoon_size):
                     msg = self.queue.get(timeout=1)
-                    log(f'msg> {msg}')
+                    if msg[-1] != 'g':
+                        log(f'msg> {msg}')
                     self.ser.write(msg.encode('ascii'))
             except queue.Empty:
                 # log('plotter> no messages')
@@ -140,6 +146,9 @@ class Plotter(threading.Thread):
                     log('plotter> finished')
                     self.state = State.HOME if self.going_home else State.POSTDRAW
                     self.going_home = False
+                    # always home after finishing drawing
+                    time.sleep(4)
+                    self.home()
                 else:
                     log(f'plotter> unknown message {repr(msg)}')
             except serial.SerialTimeoutException:
@@ -160,7 +169,6 @@ def go():
     x = int(req.args.get('x'))
     y = int(req.args.get('y'))
     speed = int(req.args.get('speed'))
-    plotter.speed(speed)
     plotter.go(x, y)
     return '',200
 
@@ -185,7 +193,7 @@ def draw():
     except KeyError:
         pass
     if not raw:
-        path = normalize(path, (xlim, ylim))
+        path = normalize(path, limit_position)
     plotter.speed(speed)
     plotter.draw(path)
     return '',200
