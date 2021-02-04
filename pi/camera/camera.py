@@ -11,14 +11,12 @@ import flask
 from flask import Flask
 from waitress import serve
 
+from flushed import log
+from wait_for_format import wait_for_format
+
 gce_url = 'http://35.235.122.201:8080'
 plotter_url = 'http://localhost:8080/draw'
 jpeg_quality = 90
-
-import sys
-def log(*args):
-    print(*args)
-    sys.stdout.flush()
 
 log('using endpoint', gce_url)
 
@@ -38,13 +36,11 @@ class Camera(threading.Thread):
         fourcc = 'MJPG'
         width = 1920*2
         height = 1080*2
-        fps = 1
+        fps = 5
 
-        cap = cv2.VideoCapture(0)
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        cap.set(cv2.CAP_PROP_FPS, fps)
+        log('camera> waiting for availability')
+        cap = wait_for_format(fourcc, width, height, fps)
+        log('camera> camera is available')
 
         self.cap = cap
         self.shutdown = threading.Event()
@@ -74,6 +70,8 @@ class Camera(threading.Thread):
             response = requests.post(plotter_url, json={'path':data})
         except ConnectionError:
             log('camera> connection error')
+        except json.errors.JSONDecodeError:
+            log('camera> JSON response error')
 
         # save to disk
         save_to_disk(encimg, 'images', '.jpg')
