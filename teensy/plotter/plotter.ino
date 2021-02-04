@@ -14,7 +14,7 @@ const short Xlimit = 10000; // set max steps in X axis, roughly 90% of full trav
 const short Ylimit = 10000; // set max steps in Y axis, roughly 90% of full travel
 const int bufferSize = 100000;
 const short initialX = 5000;
-const short initialY = 5000;
+const short initialY = 3500;
 const int finishDelay = 500; // delay before sending "e"
 
 // declare and initialize variables used throughout the code
@@ -129,9 +129,12 @@ void loop()
 
         millisNotRunning = 0;
 
-        if (((abs(stepperX.distanceToGo())) < smoothing) && ((abs(stepperY.distanceToGo())) < smoothing)) {
+        // if we are within a box around the target
+        int rdx = abs(stepperX.distanceToGo());
+        int rdy = abs(stepperY.distanceToGo());
+        if (rdx < smoothing && rdy < smoothing) {
 
-            // update if we can
+            // try to go to the next point
             if (buffer.size() > 0) {
                 Point point = buffer.pop_front();
                 Xtarget = point.x;
