@@ -7,7 +7,7 @@
 #include "src/AccelStepper/AccelStepper.h"
 
 // settings
-const int smoothing = 180;
+const int smoothing = 400;
 const long baseSpeed = 6000; // base max speed
 const int acceleration = 11000; // max acceleration in steps per second per second
 const short Xlimit = 10000; // set max steps in X axis, roughly 90% of full travel
@@ -15,6 +15,7 @@ const short Ylimit = 10000; // set max steps in Y axis, roughly 90% of full trav
 const int bufferSize = 100000;
 const short initialX = 5000;
 const short initialY = 5000;
+const int finishDelay = 500; // delay before sending "e"
 
 // declare and initialize variables used throughout the code
 AccelStepper stepperY(1, 2, 3); // (a,b,c) a== type of motor, b & c are pin assignments//1 for a = stepper driver. (ZACH NEEDS a=1)
@@ -23,6 +24,9 @@ AccelStepper stepperX(1, 4, 5); // (a,b,c) a== type of motor, b & c are pin assi
 String inputString = ""; // a string to hold incoming data
 String arg = "";
 boolean running = false;
+
+elapsedMillis millisNotRunning;
+boolean finished = false;
 
 short Xtarget = 0;
 short Ytarget = 0;
@@ -51,10 +55,9 @@ void setup()
     // points[1] = 1;
 }
 
-void done()
-{
-    Serial.print('e');
+void stopRunning() {
     running = false;
+    finished = false;
 }
 
 void loop()
@@ -82,7 +85,7 @@ void loop()
             const long speedPct = arg.toInt();
             maxSpeed = (baseSpeed * speedPct) / 99;
         } else if (inChar == 'p') { // 'p' pauses
-            done();
+            stopRunning();
             buffer.clear();
         } else if (inChar == 'g') { // 'g' goes to point
             running = true;
@@ -106,7 +109,9 @@ void loop()
         inputString = "";
     }
 
-    if (running == true) {
+    if (running) {
+
+        millisNotRunning = 0;
 
         if (((abs(stepperX.distanceToGo())) < smoothing) && ((abs(stepperY.distanceToGo())) < smoothing)) {
 
@@ -116,9 +121,7 @@ void loop()
                 Xtarget = point.x;
                 Ytarget = point.y;
             } else {
-                // otherwise we are done
-                done();
-                return;
+                stopRunning();
             }
 
             // clamp targets
@@ -142,5 +145,10 @@ void loop()
             stepperX.run();
             stepperY.run();
         }
+    }
+
+    if (!finished && millisNotRunning > finishDelay) {
+        Serial.print('e');
+        finished = true;
     }
 }

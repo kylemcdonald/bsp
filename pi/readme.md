@@ -45,6 +45,13 @@ cd ~/bsp/pi/plotter
 bash install-plotter.sh
 ```
 
+Setup the camera service:
+
+```
+cd ~/bsp/pi/camera
+bash install-camera.sh
+```
+
 ## Remote access
 
 Install and connect to Zerotier `NETWORK_ID`:
