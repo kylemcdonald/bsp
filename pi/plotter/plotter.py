@@ -15,8 +15,8 @@ from waitress import serve
 
 home_position = (5000,3500)
 limit_position = (10000, 10000)
-default_speed = 6000
-homing_speed = 6000
+default_speed = 5200
+homing_speed = 2500
 camera_url = 'http://localhost:8081/shutter'
 
 from serial.tools import list_ports
@@ -81,7 +81,12 @@ class Plotter(threading.Thread):
         self.going_home = False
         self.need_to_go_home = False
         self.state = State.HOME
-        self.smoothing(50)
+
+        # hit limits and go home on start
+        self.go(0, 0)
+        self.go(*limit_position)
+        self.home()
+
         self.start()
 
     def home(self):
@@ -172,8 +177,16 @@ def go():
     req = flask.request
     x = int(req.args.get('x'))
     y = int(req.args.get('y'))
-    speed = int(req.args.get('speed'))
     plotter.go(x, y)
+    return '',200
+
+@app.route('/params')
+def params():
+    req = flask.request
+    acceleration = int(req.args.get('acceleration'))
+    speed = int(req.args.get('speed'))
+    plotter.acceleration(acceleration)
+    plotter.speed(speed)
     return '',200
 
 @app.route('/home')

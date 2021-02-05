@@ -36,6 +36,14 @@
       c.parent("container");
       background(220);
       setInterval(checkStatus, 1000);
+
+      // for(let i = 0 ; i < 100; i++) {
+      //   let theta = Math.random() * Math.PI * 2;
+      //   let r = 180; //Math.random() * 200;
+      //   let x = 200 + Math.cos(theta) * r;
+      //   let y = 200 + Math.sin(theta) * r;
+      //   path.push([x,y]);
+      // }
     }
 
     function draw() {
@@ -107,9 +115,9 @@
 
 <body>
   <div>
-    <button onclick="fetch('/go?x=0&y=0&speed=6000')">Min</button>
+    <button onclick="fetch('/go?x=0&y=0')">Min</button>
     <button onclick="fetch('/home')">Home</button>
-    <button onclick="fetch('/go?x=10000&y=10000&speed=6000')">Max</button>
+    <button onclick="fetch('/go?x=10000&y=10000')">Max</button>
   </div>
   <div>
     <input type="range" min="4" max="4096" value="100" id="circle-n" oninput="circleClick()" />
