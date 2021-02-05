@@ -7,9 +7,9 @@
 #include "src/AccelStepper/AccelStepper.h"
 
 // settings
-int smoothing = 200; // base smoothing
-int maxSpeed = 6000; // base max speed
-int acceleration = 11000; // base max acceleration in steps per second per second
+int smoothing = 100; // base smoothing
+int maxSpeed = 52000; // base max speed
+int acceleration = 10000; // base max acceleration in steps per second per second
 const short Xlimit = 10000; // set max steps in X axis, roughly 90% of full travel
 const short Ylimit = 10000; // set max steps in Y axis, roughly 90% of full travel
 const int bufferSize = 100000;
