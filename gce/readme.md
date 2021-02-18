@@ -30,14 +30,11 @@ Build CLD:
 
 ```console
 sudo apt update
-sudo apt install \
-    cmake \
-    libopencv-dev \
-    libboost-all-dev \
-    libwxgtk3.0-gtk3-dev
-cd ~ && git clone https://github.com/SSARCandy/Coherent-Line-Drawing.git
-cd Coherent-Line-Drawing
-./build.sh
+sudo apt install libopencv-dev
+cd ~ && git clone https://github.com/aman-tiwari/coherent_line_drawing.git
+cd coherent_line_drawing
+bash build.sh
+cp cld ~/bsp/gce
 ```
 
 Create a Google Cloud Firewall rule to allow port 8080 on IP range 0.0.0.0/0 for all instances in network.

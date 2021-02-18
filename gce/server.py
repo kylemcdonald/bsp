@@ -34,18 +34,18 @@ def index():
     log('saving image', len(data), 'bytes')
     save_to_disk(data, 'images', '.jpg')
 
-    # byapss
-    with open('sample.json', 'r') as f:
-        ret = json.load(f)
-
     log('sending response')
-    return jsonify(ret)
-
-    # img_bytes = io.BytesIO(request.get_data())
-    # img = Image.open(img_bytes)
-    # ret = process_cld.rgb2line_steiner(img)
-    # with open('result.json', 'w') as f:
-    #     json.dump(ret, f)
+    
+    # bypass
+    # with open('sample.json', 'r') as f:
+    #     ret = json.load(f)
     # return jsonify(ret)
+
+    img_bytes = io.BytesIO(request.get_data())
+    img = Image.open(img_bytes)
+    ret = process_cld.rgb2line_steiner(img)
+    with open('result.json', 'w') as f:
+        json.dump(ret, f)
+    return jsonify(ret)
 
 serve(app, listen='*:8080')

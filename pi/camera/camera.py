@@ -14,7 +14,7 @@ from waitress import serve
 from flushed import log
 from wait_for_format import wait_for_format
 
-gce_url = 'http://35.235.122.201:8080'
+gce_url = 'http://bsp.kylemcdonald.net:8080'
 plotter_url = 'http://localhost:8080/draw'
 jpeg_quality = 90
 

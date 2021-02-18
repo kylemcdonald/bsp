@@ -16,7 +16,46 @@ from edges import raster_edges
 from centerline.geometry import Centerline
 from shapely import ops
 import tqdm
+from shapely.geometry import mapping, shape
+
+from multiprocessing import freeze_support, Pool, cpu_count
+
+import time
+last_time = [ time.time() ]
+def log(*args):
+    now = time.time()
+    diff = now - last_time[0]
+    last_time[0] = now
+    print(f'{diff:0.3f}', *args)
+
+def fn_c(p):
+    p = shape(p)
+    cls = Centerline(p, valid=True)
+    cls = ops.linemerge(geom.MultiLineString(cls.geoms))
+    return mapping(cls)
+
 def extract_centerlines(shapes):
+    shapes = (shape.buffer(0) for shape in shapes)
+    polys = [poly for poly in shapes if type(poly) == geom.Polygon and type(poly.envelope) == geom.Polygon]
+    pms = [mapping(p) for p in polys]
+
+    log('create Pool')
+    with Pool(cpu_count()) as pool: # ~36ms
+        centerlines = pool.map(fn_c, pms) # ~3s
+    log('end pool.map')
+
+    #centerlines = [fn_c(p) for p in pms]
+    centerlines = [shape(p) for p in centerlines]
+
+    #centerlines = [shape(fn_(mapping(p))) for p in polys]
+
+    #center_geoms = [line.geoms for line in centerlines]
+    #center_geom_lines = [geom.MultiLineString(line) for line in center_geoms]
+    #center_geom_lines = [ops.linemerge(line) for line in center_geom_lines]
+    #return center_geom_lines
+    return centerlines
+
+def old_extract_centerlines(shapes):
     shapes = (shape.buffer(0) for shape in shapes)
     polys = [poly for poly in shapes if type(poly) == geom.Polygon and type(poly.envelope) == geom.Polygon]
     centerlines = [Centerline(p, valid=True) for p in polys]
@@ -336,13 +375,13 @@ def insert_a_star_connections(lines, tri, graph_copy, grad_blurred):
                     p_next = path_between[i + 1]
                     graph_copy[p_i].remove(p_next)
                     #del graph_copy[p_i]
-                    #print('del', p_i)
+                    #log('del', p_i)
 
                 pts_between = [tuple(tri.points[idx]) for idx in path_between]
                 pts_added.append(geom.LineString(pts_between))
                 out.append(geom.LineString(pts_between))
             else:
-                print("no path")
+                log("no path")
         out.append(nearest_tail)
         curr_idx = nearest_tail_idx
     return out, pts_added
@@ -409,7 +448,7 @@ import pcst_fast
 
 def image_to_lines(gray):
 
-    print('generate raster edges')
+    log('generate raster edges')
 
     edges = raster_edges(gray)
     edges[:, 240:] = 255
@@ -418,7 +457,7 @@ def image_to_lines(gray):
     edges[:16, :] = 255
     cv2.imwrite('trace_in.bmp', edges)
 
-    print('to geojson')
+    log('to geojson')
 
     if os.name == 'nt':
         subprocess.check_call(r'.\\potrace-1.16.win64\\potrace.exe trace_in.bmp -o trace_out.geojson -b geojson')
@@ -428,19 +467,19 @@ def image_to_lines(gray):
     with open('trace_out.geojson') as fp:
         geojson = json.load(fp)
 
-    print('loading from geojson')
+    log('loading from geojson')
 
     shapes = [geom.shape(feature["geometry"]) for feature in geojson['features']]
 
-    print('extract_centerlines')
+    log('extract_centerlines')
 
     center_geom_lines = extract_centerlines(shapes)
 
-    print('explode_multilines')
+    log('explode_multilines')
 
     center_geom_lines = explode_multilines(center_geom_lines)
 
-    print('geom.Point.distance')
+    log('geom.Point.distance')
 
     center_geom_lines = [line for line in center_geom_lines
                          if max(line.length, geom.Point(line.coords[0]).distance(geom.Point(line.coords[-1]))) > 4]
@@ -523,11 +562,11 @@ def rgb2line_steiner(img):
 
 def pipeline_steiner(gray):
 
-    print('image to lines')
+    log('image to lines')
 
     center_geom_lines = image_to_lines(gray)
 
-    print('sobel + blur + grad')
+    log('sobel + blur + grad')
 
     grad = sobel(gray)
 
@@ -543,7 +582,7 @@ def pipeline_steiner(gray):
 
     tri, grad_samples = triangulate(grad_samples)
 
-    print('graph + reordering')
+    log('graph + reordering')
 
     tri_graph = to_graph(tri)
 
@@ -561,7 +600,7 @@ def pipeline_steiner(gray):
         dist = np.linalg.norm(start - end)
         return dist + gf * 10.0
 
-    print('building data')
+    log('building data')
     
     for s, nbrs in tri_graph.items():
         for t in nbrs:
@@ -569,7 +608,7 @@ def pipeline_steiner(gray):
             ts.append(t)
             data.append(w(s, t))
 
-    print('creating coo_matrix and converting to csc')
+    log('creating coo_matrix and converting to csc')
 
     mat = scipy.sparse.coo_matrix((data, (ss, ts))).tocsc()
 
@@ -578,7 +617,7 @@ def pipeline_steiner(gray):
     starts = np.asarray([v[0] for v in tri_verts])
     ends = np.asarray([v[1] for v in tri_verts])
 
-    print('setup')
+    log('setup')
 
     tri_mat = mat.copy()
     tri_mat[starts, ends] = 0.00001234 #
@@ -591,7 +630,7 @@ def pipeline_steiner(gray):
     costs = np.asarray(tri_mat[flat_edges_i, flat_edges_j].squeeze()).squeeze()
     flat_edges.shape, prizes.shape
 
-    print('fast pcst')
+    log('fast pcst')
 
     v, es = pcst_fast.pcst_fast(flat_edges, prizes, costs, -1, 1, 'gw', 1)
 
@@ -603,7 +642,7 @@ def pipeline_steiner(gray):
         graph[st].append(end)
         graph[end].append(st)
 
-    print('finishing')
+    log('finishing')
 
     special = {}
     for i, (s, e) in enumerate(zip(starts, ends)):

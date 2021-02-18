@@ -24,7 +24,7 @@ def _cld(gray, halfw = 8,smoothPasses = 4, sigma1 = .9, sigma2 = 3, tau = .97):
         wsl = 'wsl '
     else:
         wsl = ''
-    subprocess.check_call(f'{wsl}./cld --src {name}_in.bmp --output {name}_out.bmp --ETF_kernel {halfw} --ETF_iter {smoothPasses} --sigma_c {sigma1} --sigma_m {sigma2} --tau {tau}', shell=True)
+    subprocess.check_call(f'{wsl}./cld {name}_in.bmp {name}_out.bmp {halfw} {smoothPasses} {sigma1} {sigma2} {tau}', shell=True)
     return cv2.imread(f'{name}_out.bmp', cv2.IMREAD_GRAYSCALE)
 
 def raster_edges(gray, histogram_eq=False, cld=True, canny_low=100, canny_hi=200):
