@@ -13,8 +13,10 @@ import flask
 from flask import Flask
 from waitress import serve
 
-xlim = 10000
-ylim = 10000
+home_position = (5000,3500)
+limit_position = (10000, 10000)
+default_speed = 5200
+homing_speed = 2500
 camera_url = 'http://localhost:8081/shutter'
 
 from serial.tools import list_ports
@@ -42,7 +44,7 @@ class FakeSerial:
     def read(self):
         return b''
 
-# normalize a set of points to xlim
+# normalize a set of points to limits
 def normalize(x, limit):
     x = np.asarray(x).astype(float)
     x -= x.min(0)
@@ -77,13 +79,25 @@ class Plotter(threading.Thread):
         self.queue = queue.Queue()
         self.shutdown = threading.Event()
         self.going_home = False
+        self.need_to_go_home = False
         self.state = State.HOME
+
+        # hit limits and go home on start
+        self.go(0, 0)
+        self.go(*limit_position)
+        self.home()
+
         self.start()
 
     def home(self):
-        self.speed(99)
+        if self.state == State.HOME:
+            # already home
+            return
+        log('plotter> home')
+        self.speed(homing_speed)
         self.going_home = True
-        self.go(xlim/2, ylim/2)
+        self.need_to_go_home = False
+        self.go(*home_position)
         
     def stop(self):
         log('plotter> stop')
@@ -92,8 +106,16 @@ class Plotter(threading.Thread):
         self.queue.put('p')
 
     def speed(self, speed):
-        speed = clamp_and_round(speed, 'speed', 1, 99)
-        self.queue.put(f'{speed:02d}s')
+        speed = clamp_and_round(speed, 'speed', 1, 9999)
+        self.queue.put(f'{speed:04d}s')
+
+    def smoothing(self, smoothing):
+        smoothing = clamp_and_round(smoothing, 'speed', 1, 999)
+        self.queue.put(f'{smoothing:03d}m')
+
+    def acceleration(self, acceleration):
+        acceleration = clamp_and_round(acceleration, 'speed', 1, 99999)
+        self.queue.put(f'{acceleration:05d}a')
         
     def go(self, x, y):
         x = clamp_and_round(x, 'x', 0)
@@ -104,6 +126,7 @@ class Plotter(threading.Thread):
     def draw(self, path, **args):
         for point in path:
             self.go(*point, **args)
+        self.need_to_go_home = True
             
     def join(self):
         log('plotter> sending shutdown')
@@ -117,6 +140,8 @@ class Plotter(threading.Thread):
                 qsize = self.queue.qsize()
                 for i in range(self.spoon_size):
                     msg = self.queue.get(timeout=1)
+                    if msg[-1] != 'g':
+                        log(f'msg> {msg}')
                     self.ser.write(msg.encode('ascii'))
             except queue.Empty:
                 # log('plotter> no messages')
@@ -129,6 +154,10 @@ class Plotter(threading.Thread):
                     log('plotter> finished')
                     self.state = State.HOME if self.going_home else State.POSTDRAW
                     self.going_home = False
+                    # always home after finishing draw()
+                    if self.need_to_go_home:
+                        time.sleep(4)
+                        self.home()
                 else:
                     log(f'plotter> unknown message {repr(msg)}')
             except serial.SerialTimeoutException:
@@ -148,9 +177,16 @@ def go():
     req = flask.request
     x = int(req.args.get('x'))
     y = int(req.args.get('y'))
-    speed = int(req.args.get('speed'))
-    plotter.speed(speed)
     plotter.go(x, y)
+    return '',200
+
+@app.route('/params')
+def params():
+    req = flask.request
+    acceleration = int(req.args.get('acceleration'))
+    speed = int(req.args.get('speed'))
+    plotter.acceleration(acceleration)
+    plotter.speed(speed)
     return '',200
 
 @app.route('/home')
@@ -163,7 +199,7 @@ def draw():
     req = flask.request
     path = req.json['path']
     log(f'draw> path {len(path)} points')
-    speed = 99
+    speed = default_speed
     raw = False
     try:
         speed = int(req.json['speed'])
@@ -174,7 +210,7 @@ def draw():
     except KeyError:
         pass
     if not raw:
-        path = normalize(path, (xlim, ylim))
+        path = normalize(path, limit_position)
     plotter.speed(speed)
     plotter.draw(path)
     return '',200
