@@ -10,20 +10,25 @@ Start the Pi, find the ip address and ssh into it. It will ask you to change the
 sudo systemctl disable --now apt-daily{{,-upgrade}.service,{,-upgrade}.timer}
 sudo systemctl disable --now unattended-upgrades
 sudo systemctl daemon-reload
+sudo systemctl stop unattended-upgrades
+sudo systemctl mask unattended-upgrades
 ```
 
 `sudo reboot now` then log back in and upgrade `sudo apt update && sudo apt full-upgrade -y`
 
-
-
-Install dependencies:
+Disable snapd to free some RAM:
 
 ```
+sudo systemctl stop snapd
+sudo systemctl mask snapd
+```
+
+Install other dependencies:
+
+```
+sudo apt update
 sudo apt install -y \
-    python3-pip \
-    python3-tflite-runtime \
-    cmake \
-    dphys-swapfile
+    python3-pip
 sudo dphys-swapfile install
 sudo pip3 install \
     RPi.GPIO \
@@ -33,16 +38,26 @@ sudo pip3 install \
     flask \
     waitress \
     requests 
+```
+
+Install tflite:
+
+```
+echo "deb https://packages.cloud.google.com/apt coral-edgetpu-stable main" | sudo tee /etc/apt/sources.list.d/coral-edgetpu.list
+curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+sudo apt update
+sudo apt install python3-tflite-runtime
+```
+
+Install dlib, including `dphys-swapfile` for the 2GB Raspberry Pi in order to have the memory to build dlib:
+
+```
+sudo apt install -y \
+    cmake \
+    dphys-swapfile
 sudo dphys-swapfile swapon
 sudo pip3 install dlib
 sudo dphys-swapfile swapoff
-```
-
-Disable snapd to free some RAM:
-
-```
-sudo systemctl stop snapd
-sudo systemctl mask snapd
 ```
 
 Enable gpio permissions [for all users](https://github.com/gpiozero/gpiozero/issues/837#issuecomment-703743142): `sudo chmod og+rwx /dev/gpio*`.
