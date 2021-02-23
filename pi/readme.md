@@ -14,11 +14,17 @@ sudo systemctl daemon-reload
 
 `sudo reboot now` then log back in and upgrade `sudo apt update && sudo apt full-upgrade -y`
 
+
+
 Install dependencies:
 
 ```
 sudo apt install -y \
-    python3-pip
+    python3-pip \
+    python3-tflite-runtime \
+    cmake \
+    dphys-swapfile
+sudo dphys-swapfile install
 sudo pip3 install \
     RPi.GPIO \
     gpiozero \
@@ -26,7 +32,17 @@ sudo pip3 install \
     pyserial \
     flask \
     waitress \
-    requests
+    requests 
+sudo dphys-swapfile swapon
+sudo pip3 install dlib
+sudo dphys-swapfile swapoff
+```
+
+Disable snapd to free some RAM:
+
+```
+sudo systemctl stop snapd
+sudo systemctl mask snapd
 ```
 
 Enable gpio permissions [for all users](https://github.com/gpiozero/gpiozero/issues/837#issuecomment-703743142): `sudo chmod og+rwx /dev/gpio*`.
