@@ -111,6 +111,13 @@ sudo ./teensy_loader_cli --mcu=TEENSY41 -w -v plotter.ino.TEENSY41.hex
 
 Install Avahi to allow `.local` access: `sudo apt install avahi-daemon`
 
+Then change the hostname and restart Avahi:
+
+```
+sudo hostnamectl set-hostname "bsp-install"
+sudo systemctl restart avahi-daemon
+```
+
 Simplify the login message:
 
 ```

@@ -12,7 +12,7 @@ def shape_to_points(shape):
     return np.asarray([(e.x, e.y) for e in shape.parts()])
 
 def distance(points):
-    return np.sqrt(np.sum(np.power(np.diff(points, axis=0), 2)))
+    return np.sqrt(np.sum(np.square(np.diff(points, axis=0))))
 
 def extract_between_points(img, points, output_wh, scale_factor=0.7):
     center = points.mean(0)
@@ -40,12 +40,13 @@ class EyeExtractor:
         if hasattr(rect, 'rect'):
             rect = rect.rect # pick rect from CNN
         shape = self.landmark_detector(sub, rect)
-        points = shape_to_points(shape)
-        left_eye, left_scale = extract_between_points(img, self.downsample * points[:2], self.output_wh)
-        right_eye, right_scale = extract_between_points(img, self.downsample * points[2:4], self.output_wh)
+        points = shape_to_points(shape) * self.downsample
+        left_eye, left_scale = extract_between_points(img, points[:2], self.output_wh)
+        right_eye, right_scale = extract_between_points(img, points[2:4], self.output_wh)
         scale = (left_scale + right_scale) / 2
         return {
             'scale': scale,
             'left': left_eye,
-            'right': right_eye
+            'right': right_eye,
+            'points': points
         }

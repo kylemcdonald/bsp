@@ -45,3 +45,5 @@ Install the systemd service:
 cd ~/bsp/gce
 bash install-server.sh
 ```
+
+Reserve a [static IP address](https://cloud.google.com/compute/docs/ip-addresses/reserve-static-external-ip-address) for the GCE instance. Set an A record on the DNS to point to `bsp.kylemcdonald.net`.
