@@ -17,12 +17,14 @@ led.on()
 
 def button_hold(now, seconds):
     if seconds > 3:
+        print('button hold')
         led.blink(.05, .5)
         requests.get('http://localhost:8080/home')
         time.sleep(2)
         subprocess.call(['shutdown', '-h', 'now'], shell=False)
     
 def button_release(now, seconds):
+    print('button release')
     requests.get('http://localhost:8080/button')
 
 while True:
