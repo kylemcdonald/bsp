@@ -139,6 +139,14 @@ Simplify the login message:
 sudo chmod -x /etc/update-motd.d/{10-help-text,50-motd-news,90-updates-available,91-release-upgrade,92-unattended-upgrades}
 ```
 
+systemctl will say "status degraded" unless you disable motd completely. This might render the above unnecessary:
+
+```
+sudo systemctl stop motd-news
+sudo systemctl mask motd-news
+sudo systemctl reset-failed
+```
+
 With ngrok exposing the machine publicly, [disable ssh passwords](https://www.cyberciti.biz/faq/how-to-disable-ssh-password-login-on-linux/).
 
 ## Possible problems
