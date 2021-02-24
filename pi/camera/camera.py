@@ -71,7 +71,7 @@ class Camera(threading.Thread):
             response = requests.post(plotter_url, json={'path':data})
         except ConnectionError:
             log('camera> connection error')
-        except json.errors.JSONDecodeError:
+        except json.decoder.JSONDecodeError:
             log('camera> JSON response error')
 
         # save to disk
