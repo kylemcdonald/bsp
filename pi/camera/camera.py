@@ -106,10 +106,11 @@ class Camera(threading.Thread):
 
             # run through the buffer to stay up to date
             ret = self.cap.grab()
-            if not self.shutter.is_set():
-                continue
-            self.shutter.clear()
-            self.capture()
+
+            # watch for button presses
+            if self.shutter.is_set():
+                self.shutter.clear()
+                self.capture()
         log('camera> received shutdown')
 
 app = Flask(__name__)

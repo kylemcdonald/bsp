@@ -26,7 +26,7 @@ class FaceExtractor:
             print('found')
             rect = rects[0]
             center = rect.center().x, rect.center().y
-            center = np.asarray(center) * downsample
+            center = np.asarray(center) * self.downsample
         x,y = center
         t,b,l,r = (y-self.scale,y+self.scale,x-self.scale,x+self.scale)
         resized = imresize(img[t:b,l:r], output_wh=self.output_wh)
