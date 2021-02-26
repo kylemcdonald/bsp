@@ -50,8 +50,8 @@ def index():
         lines = process_cld.rgb2line_steiner(img)
         path = np.asarray(lines['coordinates'])
         path = remove_consecutive_duplicates(path)
-        path = resample_path(path, 2)
-        path = smooth_path(path, 1)
+        path = resample_path(path, 0.2)
+        path = smooth_path(path, 5)
         lines['coordinates'] = path.tolist()
 
         # save to disk

@@ -136,10 +136,10 @@ def extract_centerlines_shapes_sknw(edges):
 
 import time
 
-def image_to_lines(gray, centerline_extractor=extract_centerlines_shapes_sknw):
+def image_to_lines(gray, centerline_extractor=extract_centerlines):
     t0 = time.time()
 
-    edges = crop_edge(raster_edges(gray, cld=False))
+    edges = crop_edge(raster_edges(gray, cld=True))
 
     print(f'raster edges\t{time.time() - t0:.2f}s')
     t1 = time.time()
