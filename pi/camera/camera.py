@@ -6,6 +6,7 @@ import datetime
 import numpy as np
 import os
 import json
+from simplejson.errors import JSONDecodeError
 
 import requests
 import flask
@@ -13,6 +14,7 @@ from flask import Flask
 from waitress import serve
 
 from flushed import log
+from face_extractor import FaceExtractor
 from wait_for_format import wait_for_format
 
 gce_url = 'http://bsp-hk.kylemcdonald.net:8080'
@@ -43,6 +45,10 @@ class Camera(threading.Thread):
         cap = wait_for_format(fourcc, width, height, fps)
         log('camera> camera is available')
 
+        log('camera> loading face extractor')
+        self.face_extractor = FaceExtractor()
+        log('camera> loaded face extractor')
+
         self.cap = cap
         self.shutdown = threading.Event()
         self.shutter = threading.Event()
@@ -57,34 +63,54 @@ class Camera(threading.Thread):
         log('camera> capture')
         ret, img = self.cap.read()
 
-        # convert to jpeg
+        log('camera> extracting face')
+        sub = self.face_extractor(img)
+
+        log('camera> convert to jpg for post')
         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
-        _, encimg = cv2.imencode('.jpg', img, encode_param)
+        _, encimg = cv2.imencode('.jpg', sub, encode_param)
 
         # send to endpoint
         data = encimg.tobytes()
         headers = {'Content-type': 'image/jpeg'}
         try:
+            log('camera> post jpg')
             response = requests.post(gce_url, data=data, headers=headers)
+            log('camera> response')
             data = response.json()['coordinates']
             log(f'camera> gce response {len(data)} points')
             response = requests.post(plotter_url, json={'path':data})
         except ConnectionError:
             log('camera> connection error')
-        except json.decoder.JSONDecodeError:
+        except JSONDecodeError:
             log('camera> JSON response error')
+            log(response.raw)
 
-        # save to disk
+        log('camera> convert to jpg and save to disk')
+        _, encimg = cv2.imencode('.jpg', img, encode_param)
         save_to_disk(encimg, 'images', '.jpg')
 
     def run(self):
+        last_time = time.time()
         while not self.shutdown.is_set():
+            # now = time.time()
+            # if now - last_time > 5:
+            #     print('camera> grabbing reference')
+            #     ret, img = self.cap.read()
+            #     log('camera> convert to jpg')
+            #     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
+            #     _, encimg = cv2.imencode('.jpg', img, encode_param)
+            #     log('camera> save to disk')
+            #     save_to_disk(encimg, 'references', '.jpg')
+            #     last_time = now
+
             # run through the buffer to stay up to date
             ret = self.cap.grab()
-            if not self.shutter.is_set():
-                continue
-            self.shutter.clear()
-            self.capture()
+
+            # watch for button presses
+            if self.shutter.is_set():
+                self.shutter.clear()
+                self.capture()
         log('camera> received shutdown')
 
 app = Flask(__name__)
