@@ -6,6 +6,7 @@ import datetime
 import numpy as np
 import os
 import json
+from simplejson.errors import JSONDecodeError
 
 import requests
 import flask
@@ -57,7 +58,7 @@ class Camera(threading.Thread):
         log('camera> capture')
         ret, img = self.cap.read()
 
-        # convert to jpeg
+        log('camera> convert to jpg')
         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
         _, encimg = cv2.imencode('.jpg', img, encode_param)
 
@@ -65,20 +66,35 @@ class Camera(threading.Thread):
         data = encimg.tobytes()
         headers = {'Content-type': 'image/jpeg'}
         try:
+            log('camera> post jpg')
             response = requests.post(gce_url, data=data, headers=headers)
+            log('camera> response')
             data = response.json()['coordinates']
             log(f'camera> gce response {len(data)} points')
             response = requests.post(plotter_url, json={'path':data})
         except ConnectionError:
             log('camera> connection error')
-        except json.decoder.JSONDecodeError:
+        except JSONDecodeError:
             log('camera> JSON response error')
+            log(response.raw)
 
         # save to disk
         save_to_disk(encimg, 'images', '.jpg')
 
     def run(self):
+        last_time = time.time()
         while not self.shutdown.is_set():
+            # now = time.time()
+            # if now - last_time > 5:
+            #     print('camera> grabbing reference')
+            #     ret, img = self.cap.read()
+            #     log('camera> convert to jpg')
+            #     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
+            #     _, encimg = cv2.imencode('.jpg', img, encode_param)
+            #     log('camera> save to disk')
+            #     save_to_disk(encimg, 'references', '.jpg')
+            #     last_time = now
+
             # run through the buffer to stay up to date
             ret = self.cap.grab()
             if not self.shutter.is_set():
