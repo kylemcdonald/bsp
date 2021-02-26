@@ -46,17 +46,23 @@ def index():
     img_bytes = io.BytesIO(request.get_data())
     img = Image.open(img_bytes)
     
-    lines = process_cld.rgb2line_steiner(img)
-    path = np.asarray(lines['coordinates'])
-    path = remove_consecutive_duplicates(path)
-    path = resample_path(path, 2)
-    path = smooth_path(path, 1)
-    lines['coordinates'] = path.tolist()
+    try:
+        lines = process_cld.rgb2line_steiner(img)
+        path = np.asarray(lines['coordinates'])
+        path = remove_consecutive_duplicates(path)
+        path = resample_path(path, 2)
+        path = smooth_path(path, 1)
+        lines['coordinates'] = path.tolist()
 
-    # save to disk
-    # with open('result.json', 'w') as f:
-    #     json.dump(lines, f)
+        # save to disk
+        # with open('result.json', 'w') as f:
+        #     json.dump(lines, f)
 
-    return jsonify(lines)
+        return jsonify(lines)
+    
+    except:
+        log('error')
+        with open('error.json') as f:
+            return jsonify(json.load(f))
 
 serve(app, listen='*:8080')
