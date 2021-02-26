@@ -12,7 +12,7 @@ Log in, `ssh-keygen` and add to GitHub. Clone this repo.
 sudo apt update
 sudo apt install -y \
     python3-pip
-sudo pip install \
+sudo pip3 install \
     waitress \
     flask \
     pillow \
@@ -21,10 +21,9 @@ sudo pip install \
     shapely \
     centerline \
     tqdm \
-    scikit-image \
-    sknw
-sudo pip install git+https://github.com/fraenkel-lab/pcst_fast.git
-sudo pip install git+https://github.com/Image-Py/sknw
+    scikit-image
+sudo pip3 install git+https://github.com/fraenkel-lab/pcst_fast.git
+sudo pip3 install git+https://github.com/Image-Py/sknw
 ```
 
 If you install `opencv-python` on GCE it will complain, which is why you need [`opencv-python-headless`](https://stackoverflow.com/a/63978454/940196).
