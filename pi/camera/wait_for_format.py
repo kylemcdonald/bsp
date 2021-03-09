@@ -10,6 +10,8 @@ def wait_for_format(fourcc, width, height, fps, port=0):
         camera.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         camera.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         camera.set(cv2.CAP_PROP_FPS, fps)
+        camera.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+        camera.set(cv2.CAP_PROP_FOCUS, 0)
         if not camera.isOpened():
             log('camera> port not opening')
         else:
