@@ -20,8 +20,10 @@ sudo pip3 install \
     matplotlib \
     shapely \
     centerline \
-    tqdm
+    tqdm \
+    scikit-image
 sudo pip3 install git+https://github.com/fraenkel-lab/pcst_fast.git
+sudo pip3 install git+https://github.com/Image-Py/sknw
 ```
 
 If you install `opencv-python` on GCE it will complain, which is why you need [`opencv-python-headless`](https://stackoverflow.com/a/63978454/940196).
@@ -31,7 +33,7 @@ Build CLD:
 ```console
 sudo apt update
 sudo apt install libopencv-dev
-cd ~ && git clone https://github.com/aman-tiwari/coherent_line_drawing.git
+cd ~ && git clone https://github.com/kylemcdonald/coherent_line_drawing.git
 cd coherent_line_drawing
 bash build.sh
 cp cld ~/bsp/gce

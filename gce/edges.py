@@ -17,7 +17,7 @@ def histogram_equalize(data, max_val=None, endpoint=False):
     data_flat[indices] = replacements
     return data_flat.reshape(*input_shape)
 
-def _cld(gray, halfw = 8,smoothPasses = 4, sigma1 = .9, sigma2 = 3, tau = .97):
+def _cld(gray, halfw = 4,smoothPasses = 2, sigma1 = .8, sigma2 = 4, tau = .975):
     name = 'cld_tmp_'
     cv2.imwrite(f'{name}_in.bmp', gray)
     if os.name == 'nt':
@@ -27,7 +27,7 @@ def _cld(gray, halfw = 8,smoothPasses = 4, sigma1 = .9, sigma2 = 3, tau = .97):
     subprocess.check_call(f'{wsl}./cld {name}_in.bmp {name}_out.bmp {halfw} {smoothPasses} {sigma1} {sigma2} {tau}', shell=True)
     return cv2.imread(f'{name}_out.bmp', cv2.IMREAD_GRAYSCALE)
 
-def raster_edges(gray, histogram_eq=False, cld=True, canny_low=100, canny_hi=200):
+def raster_edges(gray, histogram_eq=False, cld=True, canny_low=120, canny_hi=255):
     if histogram_eq:
         gray = histogram_equalize(gray)
 
