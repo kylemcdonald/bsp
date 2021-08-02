@@ -76,8 +76,7 @@ class Plotter(threading.Thread):
         self.ready = True
         self.queue = queue.Queue()
         self.shutdown = threading.Event()
-        self.going_home = False
-        self.need_to_go_home = False
+        # self.need_to_go_home = False
         self.state = State.HOME
 
         # hit limits and go home on start
@@ -89,17 +88,19 @@ class Plotter(threading.Thread):
         self.start()
 
     def define_position(self, x, y):
+        # https://github.com/synthetos/TinyG/wiki/Coordinate-Systems
         self.queue.put(f'g10l2p1x{-x:.4f}y{-y:.4f}\n')
 
     def home(self):
         if self.state == State.HOME:
             # already home
+            log('plotter> already home')
             return
         log('plotter> home')
         # self.speed(homing_speed)
-        self.going_home = True
-        self.need_to_go_home = False
+        # self.need_to_go_home = False
         self.go(*home_position)
+        self.state = State.HOME
         
     def stop(self):
         log('plotter> stop')
@@ -134,7 +135,7 @@ class Plotter(threading.Thread):
     def draw(self, path, **args):
         for point in path:
             self.go(*point, **args)
-        self.need_to_go_home = True
+        # self.need_to_go_home = True
             
     def join(self):
         log('plotter> sending shutdown')
@@ -147,32 +148,39 @@ class Plotter(threading.Thread):
     def run(self):
         blast_size = 4
         read_queue_size = 0
+        queue_previously_empty = True
         while not self.shutdown.is_set():
             time.sleep(0.01)
             try:
                 msg = self.queue.get(timeout=1)
-                log(f'msg> {repr(msg)}')
+                queue_previously_empty = False
+                # log(f'msg> {repr(msg)}')
                 self.ser.write(msg.encode('ascii'))
                 read_queue_size += 1
             except queue.Empty:
-                log('plotter> queue empty')
+                if not queue_previously_empty:
+                    log('plotter> queue empty')
+                queue_previously_empty = True
                 pass
             try:
                 if read_queue_size < blast_size and not self.queue.empty():
-                    log(f'plotter> blasting, skipping read_until')
+                    log(f'plotter> blast-write to fill buffer')
                     continue
                 if read_queue_size > 0:
-                    msg = self.ser.read_until()
-                    log(f'plotter> response {repr(msg)}')
-                    read_queue_size -= 1
-                if read_queue_size == 0:
-                    log('plotter> finished')
-                    self.state = State.HOME if self.going_home else State.POSTDRAW
-                    self.going_home = False
-                    # always home after finishing draw()
-                    if self.need_to_go_home:
-                        time.sleep(4)
-                        self.home()
+                    if read_queue_size >= blast_size and self.queue.empty():
+                        while read_queue_size > 0:
+                            log('plotter> blast-read to empty buffer')
+                            self.ser.read_until()
+                            read_queue_size -= 1
+                            # log(f'plotter> response {repr(msg)}')
+                    else:
+                        msg = self.ser.read_until()
+                        read_queue_size -= 1
+                        # log(f'plotter> response {repr(msg)}')
+                if read_queue_size == 0 and self.state == State.DRAWING:
+                    log('plotter> finished drawing, waiting to go home')
+                    time.sleep(4)
+                    self.home()
             except serial.SerialTimeoutException:
                 log('plotter> timeout')
         log('plotter> received shutdown')
@@ -231,6 +239,7 @@ def draw():
 @app.route('/stop')
 def stop():
     plotter.stop()
+    plotter.home()
     return '',200
 
 @app.route('/shutter')
@@ -243,10 +252,13 @@ def shutter():
 def button():
     log('button> pressed')
     if plotter.state == State.HOME:
+        log('button> shutter()')
         shutter()
     elif plotter.state == State.DRAWING:
+        log('button> stop()')
         stop()
     elif plotter.state == State.POSTDRAW:
+        log('button> home()')
         home()
     return '',200
 

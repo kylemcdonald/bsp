@@ -1,5 +1,20 @@
 # tinyg
 
+## Setup uploader
+
+Install [nvm](https://github.com/nvm-sh/nvm), then Node v6 and [node-g2core-api](https://github.com/synthetos/node-g2core-api):
+
+```
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.38.0/install.sh | bash
+source ~/.bashrc
+nvm install lts/boron
+npm install -g g2core-api
+```
+
+node-g2core-api [only supports Node v6](https://github.com/synthetos/node-g2core-api/issues/8).
+
+## Setup TinyG board
+
 Previously we used microsteppers with 8 microsteps and 2.8A of current.
 
 The motors are configured as follows:
@@ -37,4 +52,4 @@ Sending GCode:
 * Reset after changing microsteps, or 0,0 will end up in a weird location
 * Both axes have around 103mm travel.
 * To use soft limits to reset the axes, go to +100 and +100.
-* Sending a `?` seems to reset the JSON-response mode back to text-response mode.
+* "JSON mode is exited any time by sending a line starting with '$', '?' or 'h'"

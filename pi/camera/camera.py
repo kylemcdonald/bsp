@@ -17,7 +17,7 @@ from flushed import log
 from face_extractor import FaceExtractor
 from wait_for_format import wait_for_format
 
-gce_url = 'http://bsp-hk.kylemcdonald.net:8080'
+gce_url = 'http://bsp-ams.kylemcdonald.net:8080'
 plotter_url = 'http://localhost:8080/draw'
 jpeg_quality = 90
 
@@ -69,6 +69,8 @@ class Camera(threading.Thread):
         log('camera> convert to jpg for post')
         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
         _, encimg = cv2.imencode('.jpg', sub, encode_param)
+
+        save_to_disk(encimg, 'faces', '.jpg')
 
         # send to endpoint
         data = encimg.tobytes()
