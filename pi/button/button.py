@@ -5,6 +5,10 @@ from gpiozero import InputDevice, LED
 import subprocess
 import requests
 
+# RPI enumeration is:
+# pin 5 & 6 are used for the button (3 & ground)
+# pin 7 & 9 are used for the LED (4 & ground)
+
 button_pin = 3
 led_pin = 4
 
