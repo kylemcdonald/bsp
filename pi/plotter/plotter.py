@@ -13,7 +13,7 @@ import flask
 from flask import Flask
 from waitress import serve
 
-home_position = (50,35)
+home_position = (50, 65)
 limit_position = (100, 100)
 # default_speed = 52
 # homing_speed = 25
@@ -44,8 +44,10 @@ class FakeSerial:
         return b''
 
 # normalize a set of points to limits
-def normalize(x, limit):
+def normalize(x, limit, flip_y=False):
     x = np.asarray(x).astype(float)
+    if flip_y:
+        x[:,1] *= -1
     x -= x.min(0)
     x *= limit / x.max()
     x += (limit - x.max(0)) / 2
@@ -231,7 +233,7 @@ def draw():
     except KeyError:
         pass
     if not raw:
-        path = normalize(path, limit_position)
+        path = normalize(path, limit_position, flip_y=True)
     # plotter.speed(speed)
     plotter.draw(path)
     return '',200
