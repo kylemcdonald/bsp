@@ -50,13 +50,14 @@ def index():
         lines = process_cld.rgb2line_steiner(img)
         path = np.asarray(lines['coordinates'])
         path = remove_consecutive_duplicates(path)
-        path = resample_path(path, 0.2)
-        path = smooth_path(path, 5)
+        path = resample_path(path, 0.2) # 1. resample
+        path = smooth_path(path, 3) # 2. smooth
+        path = path[::10] # 3. decimate
         lines['coordinates'] = path.tolist()
 
         # save to disk
-        # with open('result.json', 'w') as f:
-        #     json.dump(lines, f)
+        with open('result.json', 'w') as f:
+            json.dump(lines, f)
 
         return jsonify(lines)
     
