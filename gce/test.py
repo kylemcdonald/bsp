@@ -3,7 +3,7 @@ import requests
 import json
 from time import time
 
-gce_url = 'http://bsp.kylemcdonald.net:8080'
+gce_url = 'http://bsp-ams.kylemcdonald.net:8080'
 data = open('img.jpg', 'rb').read()
 headers = {'Content-type': 'image/jpeg'}
 

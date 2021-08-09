@@ -9,5 +9,5 @@
 .ipynb_checkpoints
 .vscode
 
-potrace
+potrace*
 cld
