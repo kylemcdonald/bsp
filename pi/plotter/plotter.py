@@ -13,15 +13,15 @@ import flask
 from flask import Flask
 from waitress import serve
 
-home_position = (5000,3500)
-limit_position = (10000, 10000)
-default_speed = 5200
-homing_speed = 2500
+home_position = (50,35)
+limit_position = (100, 100)
+# default_speed = 52
+# homing_speed = 25
 camera_url = 'http://localhost:8081/shutter'
 
 from serial.tools import list_ports
 try:
-    port = next(list_ports.grep('USB Serial'))
+    port = next(list_ports.grep('FT230X'))
     port = port.device
 except StopIteration:
     port = None
@@ -34,8 +34,7 @@ def log(*args):
     sys.stdout.flush()
 
 class FakeSerial:
-    def __init__(self, timeout):
-        self.timeout = timeout
+    def __init__(self):
         pass
         
     def write(self, msg):
@@ -52,114 +51,136 @@ def normalize(x, limit):
     x += (limit - x.max(0)) / 2
     return x
     
-def clamp_and_round(x, name, min_value=None, max_value=None):
+def clamp(x, name, min_value=None, max_value=None):
     if min_value is not None and x < min_value:
         warnings.warn(f'{name}={x} clamped to {min_value}')
         x = min_value
     if max_value is not None and x > max_value:
         warnings.warn(f'{name}={x} clamped to {max_value}')
         x = max_value
-    return round(x)
+    return x
 
 def chunks(x, n):
     for i in range(0, len(x), n):
         yield x[i:i+n]
 
 class Plotter(threading.Thread):
-    def __init__(self, port=None, baudrate=115200, timeout=0, spoon_size=512):
+    def __init__(self, port=None, baudrate=115200):
         super().__init__()
         if port is None:
             log('no serial port available')
-            self.ser = FakeSerial(timeout=timeout)
+            self.ser = FakeSerial()
         else:
             log('using port', port)
-            self.ser = serial.Serial(port, baudrate, timeout=timeout)
-        self.spoon_size = spoon_size
+            self.ser = serial.Serial(port, baudrate)
         self.ready = True
         self.queue = queue.Queue()
         self.shutdown = threading.Event()
-        self.going_home = False
-        self.need_to_go_home = False
+        # self.need_to_go_home = False
         self.state = State.HOME
 
         # hit limits and go home on start
+        self.define_position(*home_position)
         self.go(0, 0)
         self.go(*limit_position)
         self.home()
 
         self.start()
 
+    def define_position(self, x, y):
+        # https://github.com/synthetos/TinyG/wiki/Coordinate-Systems
+        self.queue.put(f'g10l2p1x{-x:.4f}y{-y:.4f}\n')
+
     def home(self):
         if self.state == State.HOME:
             # already home
+            log('plotter> already home')
             return
         log('plotter> home')
-        self.speed(homing_speed)
-        self.going_home = True
-        self.need_to_go_home = False
+        # self.speed(homing_speed)
+        # self.need_to_go_home = False
         self.go(*home_position)
+        self.state = State.HOME
         
     def stop(self):
         log('plotter> stop')
         with self.queue.mutex:
+            # first clear the queue to be sent
             self.queue.queue.clear() 
-        self.queue.put('p')
 
-    def speed(self, speed):
-        speed = clamp_and_round(speed, 'speed', 1, 9999)
-        self.queue.put(f'{speed:04d}s')
+            # then send hold and request tinyg queue flush
+            # https://github.com/synthetos/TinyG/wiki/TinyG-Feedhold-and-Resume
+            # the ! does not emit a response, but the % does
+            # these are both single character commands, no newline needed
+            self.queue.put('!%')
 
-    def smoothing(self, smoothing):
-        smoothing = clamp_and_round(smoothing, 'speed', 1, 999)
-        self.queue.put(f'{smoothing:03d}m')
+    # def speed(self, speed):
+    #     speed = clamp_and_round(speed, 'speed', 1, 9999)
+    #     self.queue.put(f'{speed:04d}s')
 
-    def acceleration(self, acceleration):
-        acceleration = clamp_and_round(acceleration, 'speed', 1, 99999)
-        self.queue.put(f'{acceleration:05d}a')
+    # def smoothing(self, smoothing):
+    #     smoothing = clamp_and_round(smoothing, 'speed', 1, 999)
+    #     self.queue.put(f'{smoothing:03d}m')
+
+    # def acceleration(self, acceleration):
+    #     acceleration = clamp_and_round(acceleration, 'speed', 1, 99999)
+    #     self.queue.put(f'{acceleration:05d}a')
         
     def go(self, x, y):
-        x = clamp_and_round(x, 'x', 0)
-        y = clamp_and_round(y, 'y', 0)
-        self.queue.put(f'{x:05d}{y:05d}g')
+        x = clamp(x, 'x', 0, limit_position[0])
+        y = clamp(y, 'y', 0, limit_position[1])
+        self.queue.put(f'g0x{x:.4f}y{y:.4f}\n')
         self.state = State.DRAWING
-        
+
     def draw(self, path, **args):
         for point in path:
             self.go(*point, **args)
-        self.need_to_go_home = True
+        # self.need_to_go_home = True
             
     def join(self):
         log('plotter> sending shutdown')
         self.shutdown.set()
         super().join()
         
+    # todo: write this part in a way that sends a bunch of commands quickly
+    # if there are enough commands to send, and then cleans up the responses
+    # when there are no more commands.
     def run(self):
+        blast_size = 4
+        read_queue_size = 0
+        queue_previously_empty = True
         while not self.shutdown.is_set():
             time.sleep(0.01)
             try:
-                qsize = self.queue.qsize()
-                for i in range(self.spoon_size):
-                    msg = self.queue.get(timeout=1)
-                    if msg[-1] != 'g':
-                        log(f'msg> {msg}')
-                    self.ser.write(msg.encode('ascii'))
+                msg = self.queue.get(timeout=1)
+                queue_previously_empty = False
+                # log(f'msg> {repr(msg)}')
+                self.ser.write(msg.encode('ascii'))
+                read_queue_size += 1
             except queue.Empty:
-                # log('plotter> no messages')
+                if not queue_previously_empty:
+                    log('plotter> queue empty')
+                queue_previously_empty = True
                 pass
             try:
-                msg = self.ser.read()
-                if len(msg) == 0:
+                if read_queue_size < blast_size and not self.queue.empty():
+                    log(f'plotter> blast-write to fill buffer')
                     continue
-                if msg == b'e':
-                    log('plotter> finished')
-                    self.state = State.HOME if self.going_home else State.POSTDRAW
-                    self.going_home = False
-                    # always home after finishing draw()
-                    if self.need_to_go_home:
-                        time.sleep(4)
-                        self.home()
-                else:
-                    log(f'plotter> unknown message {repr(msg)}')
+                if read_queue_size > 0:
+                    if read_queue_size >= blast_size and self.queue.empty():
+                        while read_queue_size > 0:
+                            log('plotter> blast-read to empty buffer')
+                            self.ser.read_until()
+                            read_queue_size -= 1
+                            # log(f'plotter> response {repr(msg)}')
+                    else:
+                        msg = self.ser.read_until()
+                        read_queue_size -= 1
+                        # log(f'plotter> response {repr(msg)}')
+                if read_queue_size == 0 and self.state == State.DRAWING:
+                    log('plotter> finished drawing, waiting to go home')
+                    time.sleep(4)
+                    self.home()
             except serial.SerialTimeoutException:
                 log('plotter> timeout')
         log('plotter> received shutdown')
@@ -199,25 +220,26 @@ def draw():
     req = flask.request
     path = req.json['path']
     log(f'draw> path {len(path)} points')
-    speed = default_speed
+    # speed = default_speed
     raw = False
-    try:
-        speed = int(req.json['speed'])
-    except KeyError:
-        pass
+    # try:
+    #     speed = int(req.json['speed'])
+    # except KeyError:
+    #     pass
     try:
         raw = req.json['raw']
     except KeyError:
         pass
     if not raw:
         path = normalize(path, limit_position)
-    plotter.speed(speed)
+    # plotter.speed(speed)
     plotter.draw(path)
     return '',200
 
 @app.route('/stop')
 def stop():
     plotter.stop()
+    plotter.home()
     return '',200
 
 @app.route('/shutter')
@@ -230,10 +252,13 @@ def shutter():
 def button():
     log('button> pressed')
     if plotter.state == State.HOME:
+        log('button> shutter()')
         shutter()
     elif plotter.state == State.DRAWING:
+        log('button> stop()')
         stop()
     elif plotter.state == State.POSTDRAW:
+        log('button> home()')
         home()
     return '',200
 
