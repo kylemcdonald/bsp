@@ -75,9 +75,15 @@ class Plotter(threading.Thread):
         else:
             log('using port', port)
             self.ser = serial.Serial(port, baudrate)
+            print('plotter> restarting')
+            self.ser.write(chr(24).encode('ascii'))
+            print('plotter> waiting for startup')
+            startup = self.ser.read_until()
+            print('plotter> got startup:', startup)
         self.ready = True
         self.queue = queue.Queue()
         self.shutdown = threading.Event()
+        self.clear = threading.Event()
         # self.need_to_go_home = False
         self.state = State.HOME
 
@@ -106,15 +112,7 @@ class Plotter(threading.Thread):
         
     def stop(self):
         log('plotter> stop')
-        with self.queue.mutex:
-            # first clear the queue to be sent
-            self.queue.queue.clear() 
-
-            # then send hold and request tinyg queue flush
-            # https://github.com/synthetos/TinyG/wiki/TinyG-Feedhold-and-Resume
-            # the ! does not emit a response, but the % does
-            # these are both single character commands, no newline needed
-            self.queue.put('!%')
+        self.clear.set()
 
     # def speed(self, speed):
     #     speed = clamp_and_round(speed, 'speed', 1, 9999)
@@ -154,9 +152,18 @@ class Plotter(threading.Thread):
         while not self.shutdown.is_set():
             time.sleep(0.01)
             try:
-                msg = self.queue.get(timeout=1)
-                queue_previously_empty = False
-                # log(f'msg> {repr(msg)}')
+                if self.clear.is_set():
+                    # then send hold and request tinyg queue flush
+                    # https://github.com/synthetos/TinyG/wiki/TinyG-Feedhold-and-Resume
+                    # the ! does not emit a response, but the % does "{rx:254}"
+                    # these are both single character commands, no newline needed
+                    msg = '!%'
+                    self.queue.queue.clear()
+                    self.clear.clear()
+                else:
+                    msg = self.queue.get(timeout=1)
+                    queue_previously_empty = False
+                log(f'msg> {repr(msg)}')
                 self.ser.write(msg.encode('ascii'))
                 read_queue_size += 1
             except queue.Empty:
@@ -166,19 +173,28 @@ class Plotter(threading.Thread):
                 pass
             try:
                 if read_queue_size < blast_size and not self.queue.empty():
-                    log(f'plotter> blast-write to fill buffer')
+                    log(f'plotter> blast-write to fill buffer', read_queue_size)
                     continue
                 if read_queue_size > 0:
                     if read_queue_size >= blast_size and self.queue.empty():
                         while read_queue_size > 0:
-                            log('plotter> blast-read to empty buffer')
-                            self.ser.read_until()
+                            log('plotter> blast-read to empty buffer', read_queue_size)
+                            msg = self.ser.read_until()
                             read_queue_size -= 1
-                            # log(f'plotter> response {repr(msg)}')
+                            log(f'plotter> blast response {repr(msg)}')
+                            # this message signifies that the freehold is finished
+                            # and there is nothing left in the read queue, but it 
+                            # doesn't necessarily come when the read_queue_size is 1
+                            if msg == b'{"rx":254}\n':
+                                log(f'plotter> finished at', read_queue_size)
+                                read_queue_size = 0
                     else:
                         msg = self.ser.read_until()
                         read_queue_size -= 1
-                        # log(f'plotter> response {repr(msg)}')
+                        log(f'plotter> single response {repr(msg)}')
+                        if msg == b'{"rx":254}\n':
+                            log(f'plotter> finished at', read_queue_size)
+                            read_queue_size = 0
                 if read_queue_size == 0 and self.state == State.DRAWING:
                     log('plotter> finished drawing, waiting to go home')
                     time.sleep(4)
@@ -241,7 +257,7 @@ def draw():
 @app.route('/stop')
 def stop():
     plotter.stop()
-    plotter.home()
+    # plotter.home()
     return '',200
 
 @app.route('/shutter')
