@@ -163,7 +163,7 @@ class Plotter(threading.Thread):
                 else:
                     msg = self.queue.get(timeout=1)
                     queue_previously_empty = False
-                log(f'msg> {repr(msg)}')
+                # log(f'msg> {repr(msg)}')
                 self.ser.write(msg.encode('ascii'))
                 read_queue_size += 1
             except queue.Empty:
@@ -173,27 +173,27 @@ class Plotter(threading.Thread):
                 pass
             try:
                 if read_queue_size < blast_size and not self.queue.empty():
-                    log(f'plotter> blast-write to fill buffer', read_queue_size)
+                    # log(f'plotter> blast-write to fill buffer', read_queue_size)
                     continue
                 if read_queue_size > 0:
                     if read_queue_size >= blast_size and self.queue.empty():
                         while read_queue_size > 0:
-                            log('plotter> blast-read to empty buffer', read_queue_size)
+                            # log('plotter> blast-read to empty buffer', read_queue_size)
                             msg = self.ser.read_until()
                             read_queue_size -= 1
-                            log(f'plotter> blast response {repr(msg)}')
+                            # log(f'plotter> blast response {repr(msg)}')
                             # this message signifies that the freehold is finished
                             # and there is nothing left in the read queue, but it 
                             # doesn't necessarily come when the read_queue_size is 1
                             if msg == b'{"rx":254}\n':
-                                log(f'plotter> finished at', read_queue_size)
+                                # log(f'plotter> finished at', read_queue_size)
                                 read_queue_size = 0
                     else:
                         msg = self.ser.read_until()
                         read_queue_size -= 1
-                        log(f'plotter> single response {repr(msg)}')
+                        # log(f'plotter> single response {repr(msg)}')
                         if msg == b'{"rx":254}\n':
-                            log(f'plotter> finished at', read_queue_size)
+                            # log(f'plotter> finished at', read_queue_size)
                             read_queue_size = 0
                 if read_queue_size == 0 and self.state == State.DRAWING:
                     log('plotter> finished drawing, waiting to go home')
