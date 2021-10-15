@@ -156,3 +156,22 @@ If you don't enable gpio permissions, RPi.GPIO or gpiozero will say `Not running
 RPi.GPIO does not support `wait_for_edge` on newer operating systems, possibly [due to a kernel deprecation](https://sourceforge.net/p/raspberry-gpio-python/tickets/175/). It will say `RuntimeError: Error waiting for edge` if you try to `wait_for_edge`. Simply creating a `Button` with `gpiozero` will cause `RuntimeError: Failed to add edge detection`.
 
 The Python libraries must be installed with sudo, and the shutdown service must run as root. Otherwise systemctl will read: `Failed to start Shutdown Service.` There may also be a way to configure `PYTHONPATH` to correctly find the libraries install for the local user.
+
+## Correct configuration
+
+When the USB devices are correctly plugged in, `./uhubctl` should report:
+
+```console
+Current status for hub 2 [1d6b:0003 Linux 5.4.0-1028-raspi xhci-hcd xHCI Host Controller 0000:01:00.0, USB 3.00, 4 ports, ppps]
+  Port 1: 02a0 power 5gbps Rx.Detect
+  Port 2: 0203 power 5gbps U0 enable connect [046d:085e Logitech BRIO 90023138]
+  Port 3: 02a0 power 5gbps Rx.Detect
+  Port 4: 02a0 power 5gbps Rx.Detect
+Current status for hub 1-1 [2109:3431 USB2.0 Hub, USB 2.10, 4 ports, ppps]
+  Port 1: 0100 power
+  Port 2: 0100 power
+  Port 3: 0100 power
+  Port 4: 0103 power enable connect [0403:6015 FTDI FT230X Basic UART D308QQ85]
+Current status for hub 1 [1d6b:0002 Linux 5.4.0-1028-raspi xhci-hcd xHCI Host Controller 0000:01:00.0, USB 2.00, 1 ports, ppps]
+  Port 1: 0503 power highspeed enable connect [2109:3431 USB2.0 Hub, USB 2.10, 4 ports, ppps]
+  ```
