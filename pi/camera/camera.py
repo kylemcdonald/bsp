@@ -3,13 +3,10 @@ import cv2
 import time
 import threading
 import datetime
-import numpy as np
 import os
-import json
 from simplejson.errors import JSONDecodeError
 
 import requests
-import flask
 from flask import Flask
 from waitress import serve
 
@@ -60,14 +57,21 @@ class Camera(threading.Thread):
         super().join()
         
     def capture(self):
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
+
         log('camera> capture')
         ret, img = self.cap.read()
 
         log('camera> extracting face')
-        sub = self.face_extractor(img)
+        try:
+            sub = self.face_extractor(img)
+        except:
+            log('camera> error extracting face, saving image to disk')
+            _, encimg = cv2.imencode('.jpg', img, encode_param)
+            save_to_disk(encimg, 'error', '.jpg')
+            return
 
         log('camera> convert to jpg for post')
-        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
         _, encimg = cv2.imencode('.jpg', sub, encode_param)
 
         save_to_disk(encimg, 'faces', '.jpg')

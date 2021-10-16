@@ -1,6 +1,7 @@
 import dlib
 import cv2
 import numpy as np
+from crop import safe_crop
 
 def imresize(img, scale=None, output_wh=None):
     if scale is not None:
@@ -28,6 +29,7 @@ class FaceExtractor:
             center = rect.center().x, rect.center().y
             center = np.asarray(center) * self.downsample
         x,y = center
-        t,b,l,r = (y-self.scale,y+self.scale,x-self.scale,x+self.scale)
-        resized = imresize(img[t:b,l:r], output_wh=self.output_wh)
+        tblr = (y-self.scale,y+self.scale,x-self.scale,x+self.scale)
+        roi = safe_crop(img, tblr, fill=128)
+        resized = imresize(roi, output_wh=self.output_wh)
         return resized

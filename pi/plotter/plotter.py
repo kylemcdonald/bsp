@@ -4,8 +4,8 @@ import warnings
 import threading
 import time
 import queue
-import struct
-from enum import Enum, auto
+import time
+from enum import Enum
 
 import requests
 import numpy as np
@@ -76,8 +76,10 @@ class Plotter(threading.Thread):
             log('using port', port)
             self.ser = serial.Serial(port, baudrate)
             print('plotter> restarting')
+            time.sleep(1)
             self.ser.write(chr(24).encode('ascii'))
             print('plotter> waiting for startup')
+            time.sleep(1)
             startup = self.ser.read_until()
             print('plotter> got startup:', startup)
         self.ready = True
@@ -146,6 +148,7 @@ class Plotter(threading.Thread):
     # if there are enough commands to send, and then cleans up the responses
     # when there are no more commands.
     def run(self):
+        print('plotter> run')
         blast_size = 4
         read_queue_size = 0
         queue_previously_empty = True
