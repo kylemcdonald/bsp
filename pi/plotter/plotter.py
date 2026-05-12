@@ -161,6 +161,7 @@ class Plotter(threading.Thread):
                     # the ! does not emit a response, but the % does "{rx:254}"
                     # these are both single character commands, no newline needed
                     msg = '!%'
+                    log(f'plotter> clearing queue')
                     self.queue.queue.clear()
                     self.clear.clear()
                 else:
@@ -189,14 +190,14 @@ class Plotter(threading.Thread):
                             # and there is nothing left in the read queue, but it 
                             # doesn't necessarily come when the read_queue_size is 1
                             if msg == b'{"rx":254}\n':
-                                # log(f'plotter> finished at', read_queue_size)
+                                log(f'plotter> finished at (a)', read_queue_size)
                                 read_queue_size = 0
                     else:
                         msg = self.ser.read_until()
                         read_queue_size -= 1
                         # log(f'plotter> single response {repr(msg)}')
                         if msg == b'{"rx":254}\n':
-                            # log(f'plotter> finished at', read_queue_size)
+                            log(f'plotter> finished at (b)', read_queue_size)
                             read_queue_size = 0
                 if read_queue_size == 0 and self.state == State.DRAWING:
                     log('plotter> finished drawing, waiting to go home')

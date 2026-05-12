@@ -110,6 +110,10 @@
         }),
       });
     }
+
+    function sendWithDelay() {
+      setTimeout(send, 2000);
+    }
   </script>
 </head>
 
@@ -130,6 +134,7 @@
     Speed
   </div>
   <button onclick="send()">Send</button>
+  <button onclick="sendWithDelay()">Send with delay</button>
   <button onclick="fetch('/stop')">Stop</button>
   <button onclick="fetch('/button')">Button</button>
   <div style="font-family: monospace">
