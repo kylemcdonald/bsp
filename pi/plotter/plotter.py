@@ -39,6 +39,9 @@ class FakeSerial:
         
     def write(self, msg):
         log('serial> write', msg)
+
+    def read_until(self):
+        return b''
         
     def read(self):
         return b''
@@ -74,13 +77,14 @@ class Plotter(threading.Thread):
             self.ser = FakeSerial()
         else:
             log('using port', port)
-            self.ser = serial.Serial(port, baudrate)
+            self.ser = serial.Serial(port, baudrate, timeout=2, write_timeout=2, rtscts=True)
+            self.ser.reset_input_buffer()
             print('plotter> restarting')
             time.sleep(1)
             self.ser.write(chr(24).encode('ascii'))
+            self.ser.flush()
             print('plotter> waiting for startup')
-            time.sleep(1)
-            startup = self.ser.read_until()
+            startup = self.wait_for_startup()
             print('plotter> got startup:', startup)
         self.ready = True
         self.queue = queue.Queue()
@@ -96,6 +100,18 @@ class Plotter(threading.Thread):
         self.home()
 
         self.start()
+
+    def wait_for_startup(self, timeout=8):
+        deadline = time.time() + timeout
+        startup = b''
+        while time.time() < deadline:
+            msg = self.ser.read_until()
+            if not msg:
+                continue
+            startup += msg
+            if b'SYSTEM READY' in msg:
+                break
+        return startup
 
     def define_position(self, x, y):
         # https://github.com/synthetos/TinyG/wiki/Coordinate-Systems
@@ -169,6 +185,7 @@ class Plotter(threading.Thread):
                     queue_previously_empty = False
                 # log(f'msg> {repr(msg)}')
                 self.ser.write(msg.encode('ascii'))
+                self.ser.flush()
                 read_queue_size += 1
             except queue.Empty:
                 if not queue_previously_empty:
@@ -184,6 +201,10 @@ class Plotter(threading.Thread):
                         while read_queue_size > 0:
                             # log('plotter> blast-read to empty buffer', read_queue_size)
                             msg = self.ser.read_until()
+                            if not msg:
+                                log('plotter> read timeout')
+                                read_queue_size = 0
+                                break
                             read_queue_size -= 1
                             # log(f'plotter> blast response {repr(msg)}')
                             # this message signifies that the freehold is finished
@@ -194,6 +215,10 @@ class Plotter(threading.Thread):
                                 read_queue_size = 0
                     else:
                         msg = self.ser.read_until()
+                        if not msg:
+                            log('plotter> read timeout')
+                            read_queue_size = 0
+                            continue
                         read_queue_size -= 1
                         # log(f'plotter> single response {repr(msg)}')
                         if msg == b'{"rx":254}\n':
@@ -205,6 +230,10 @@ class Plotter(threading.Thread):
                     self.home()
             except serial.SerialTimeoutException:
                 log('plotter> timeout')
+            except serial.SerialException as e:
+                log('plotter> serial error', e)
+                read_queue_size = 0
+                time.sleep(1)
         log('plotter> received shutdown')
 
 app = Flask(__name__)
