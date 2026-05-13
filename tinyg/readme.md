@@ -10,7 +10,7 @@ The motors are configured as follows:
 * Motor 1 is the x axis: `$1ma=0`
 * Motor 2 and 3 are the y axis: `$2ma=1` and `$3ma=1`
 * Motor 4 is not used `$4ma=2` (assigned to Z)
-* All motors set to 8 microsteps: `$1mi=4` `$2mi=4` `$3mi=4` This gives us a little more torque, traded for accuracy.
+* TinyG microsteps remain `$1mi=4` `$2mi=4` `$3mi=4`. Testing did not find a better setting.
 * Axes are normal `$xam=1` `$yam=1`
 * Limit switches are disabled `$xsn=0` `$ysn=0`
 * Default steps per revolution: 200 (1.8 degrees per step) `$1sa=1.8` etc.
@@ -24,11 +24,6 @@ The plotter service applies `$xjm=2000`, `$yjm=2000`, `$xvm=3000`, and `$yvm=300
 
 If a complex path still rings too much, the best fallback from testing was `$xjm=1500`, `$yjm=2000`, `$xvm=3000`, `$yvm=3000`, but this is a more aggressive change and should be tested on the actual path before adopting.
 
-Things to look into:
-
-* What is the ideal current? We can change the trim pots to adjust this.
-* What is the ideal number of microsteps for this application? Torque drops at higher microsteps and higher speeds.
-
 Sending GCode:
 
 * Do not use this node library https://github.com/synthetos/node-g2core-api it [does not work](https://github.com/synthetos/node-g2core-api/issues/13)
@@ -36,6 +31,50 @@ Sending GCode:
 ## Motion testing
 
 `motion_param_harness.py` runs TinyG move sequences while recording iPhone motion data from the local Motion Recorder app. It defaults to the current recommended params and keeps the previous 2500M jerk values only as a legacy comparison.
+
+Ringing is measured from the iPhone `deviceMotion.userAcceleration` stream at about 100Hz:
+
+* Record idle baseline, then fixed X, Y, and diagonal move sequences.
+* Remove slow drift with an approximately 200ms rolling mean.
+* Score the high-frequency acceleration after each move with settle RMS, settle peak, and settle time.
+* Treat motion as ringing while high-frequency acceleration is above `max(0.012g, 4x idle high-frequency RMS)`.
+
+Lower scores are better. The absolute score has run-to-run noise, so compare repeated trials with the same move distance.
+
+## Motion parameter notes
+
+The previous motion params were `$xjm=2500`, `$yjm=2500`, `$xvm=3000`, `$yvm=3000`.
+
+The main result is that reducing jerk to 2000M improves settling while keeping the same useful velocity. On 20mm moves, `$xjm=2000`, `$yjm=2000`, `$xvm=3000`, `$yvm=3000` improved the score from `9.21` to `8.57`, reduced settle RMS from `0.00359g` to `0.00309g`, and reduced peak user acceleration from `0.2055g` to `0.1798g`.
+
+Velocity tests did not justify changing `$xvm`/`$yvm`:
+
+* 3100mm/min increased ringing.
+* 2800-2900mm/min did not improve smoothness enough to justify the speed loss.
+* 3000mm/min remains the best default until a path-specific planner is tested.
+
+Lower or asymmetric jerk can be useful, but is not the default yet:
+
+* `$xjm=1500`, `$yjm=2000`, `$xvm=3000`, `$yvm=3000` sometimes had the best 25mm settle metrics.
+* The result was not enough to replace the simpler symmetric 2000M default before testing real drawing paths.
+
+## Microstep notes
+
+Microsteps were tested by changing `$1mi`, `$2mi`, and `$3mi` together to `1`, `2`, `4`, and `8`. TinyG was reset after each change, the current physical home position was redefined, and cautious centered moves were run from 1mm upward.
+
+The current `$1mi=4`, `$2mi=4`, `$3mi=4` setting should stay:
+
+* `mi=1` was clearly rougher, especially on 3mm moves.
+* `mi=8` was safe, but rang more on small 3mm moves.
+* `mi=2` was close to `mi=4`, but not better enough to justify changing.
+* In a focused 20mm repeat, `mi=4` averaged `score=8.66`, `settle_rms=0.00309g`, `settle_peak=0.00774g`; `mi=2` averaged `score=8.74`, `settle_rms=0.00314g`, `settle_peak=0.00784g`.
+
+Reset TinyG after changing microsteps. Without a reset and coordinate redefinition, 0,0 can end up in the wrong physical location.
+
+Things to look into:
+
+* What is the ideal current? We can change the trim pots to adjust this. The iPhone tests suggest jerk and microsteps are the first controls to tune; current still needs a physical trim-pot experiment.
+* How should the motion planner adapt speed and cornering based on path geometry?
 
 # Notes
 
