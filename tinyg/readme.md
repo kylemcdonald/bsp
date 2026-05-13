@@ -15,10 +15,14 @@ The motors are configured as follows:
 * Limit switches are disabled `$xsn=0` `$ysn=0`
 * Default steps per revolution: 200 (1.8 degrees per step) `$1sa=1.8` etc.
 * TPI is around 6.35 per inch, or 4mm pitch `$1tr=4` `$2tr=4` `$3tr=4` (assumes we are in mm mode)
-* Jerk maximum is 2500M mm/min^3  `$xjm=2500` `$yjm=2500` and possibly higher. 3000M mm/min^3 is possible. Note the documentation: "Jerk values that are less than 1,000,000 are assumed to be multiplied by 1 million. This keeps from having to keep track of all those zeros. For example, to enter 5 billion the value '5000' can be entered."
-* Velocity is 3000mm/min `$xvm=3000` `$yvm=3000` and possibly very slightly higher. 3200mm/min is slightly too high.
+* Jerk maximum is 2000M mm/min^3: `$xjm=2000` `$yjm=2000`. iPhone accelerometer testing showed less post-move ringing than the previous 2500M setting. Note the documentation: "Jerk values that are less than 1,000,000 are assumed to be multiplied by 1 million. This keeps from having to keep track of all those zeros. For example, to enter 5 billion the value '5000' can be entered."
+* Velocity is 3000mm/min: `$xvm=3000` `$yvm=3000`. 3100mm/min and higher increased ringing; 2800-2900mm/min did not improve smoothness enough to justify the speed loss.
 * Disable queue reporting `$qv=0`
 * Disable text verbosity `$tv=0`
+
+The plotter service applies `$xjm=2000`, `$yjm=2000`, `$xvm=3000`, and `$yvm=3000` at startup.
+
+If a complex path still rings too much, the best fallback from testing was `$xjm=1500`, `$yjm=2000`, `$xvm=3000`, `$yvm=3000`, but this is a more aggressive change and should be tested on the actual path before adopting.
 
 Things to look into:
 
@@ -28,6 +32,10 @@ Things to look into:
 Sending GCode:
 
 * Do not use this node library https://github.com/synthetos/node-g2core-api it [does not work](https://github.com/synthetos/node-g2core-api/issues/13)
+
+## Motion testing
+
+`motion_param_harness.py` runs TinyG move sequences while recording iPhone motion data from the local Motion Recorder app. It defaults to the current recommended params and keeps the previous 2500M jerk values only as a legacy comparison.
 
 # Notes
 

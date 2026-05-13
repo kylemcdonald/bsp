@@ -15,9 +15,13 @@ from waitress import serve
 
 home_position = (50, 65)
 limit_position = (100, 100)
-# default_speed = 52
-# homing_speed = 25
 camera_url = 'http://localhost:8081/shutter'
+tinyg_motion_params = {
+    'xjm': 2000,
+    'yjm': 2000,
+    'xvm': 3000,
+    'yvm': 3000,
+}
 
 from serial.tools import list_ports
 try:
@@ -86,6 +90,7 @@ class Plotter(threading.Thread):
             print('plotter> waiting for startup')
             startup = self.wait_for_startup()
             print('plotter> got startup:', startup)
+            self.configure_tinyg()
         self.ready = True
         self.queue = queue.Queue()
         self.shutdown = threading.Event()
@@ -112,6 +117,36 @@ class Plotter(threading.Thread):
             if b'SYSTEM READY' in msg:
                 break
         return startup
+
+    def send_startup_command(self, command, timeout=2, idle_timeout=0.1):
+        old_timeout = self.ser.timeout
+        self.ser.timeout = min(old_timeout or timeout, 0.1)
+        responses = []
+        try:
+            self.ser.write(f'{command}\n'.encode('ascii'))
+            self.ser.flush()
+            deadline = time.time() + timeout
+            idle_deadline = None
+            while time.time() < deadline:
+                msg = self.ser.read_until()
+                if msg:
+                    responses.append(msg)
+                    idle_deadline = time.time() + idle_timeout
+                elif responses and idle_deadline is not None and time.time() >= idle_deadline:
+                    break
+        finally:
+            self.ser.timeout = old_timeout
+        return responses
+
+    def configure_tinyg(self):
+        log('plotter> configuring TinyG motion params', tinyg_motion_params)
+        for name, value in tinyg_motion_params.items():
+            responses = self.send_startup_command(f'${name}={value}')
+            log('plotter> TinyG', name, responses)
+        # Parameter commands leave JSON mode; restore it before normal G-code streaming.
+        self.send_startup_command('$ej=1')
+        self.send_startup_command('g21')
+        self.send_startup_command('g90')
 
     def define_position(self, x, y):
         # https://github.com/synthetos/TinyG/wiki/Coordinate-Systems
