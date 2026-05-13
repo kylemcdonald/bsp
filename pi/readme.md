@@ -107,21 +107,6 @@ sudo rm -rf install.sh systemd-ngrok
 
 ngrok tunnels a port to ssh. If ngrok says the service is running at `tcp://0.tcp.ngrok.io:1234` then access the pi with `ssh ubuntu@0.tcp.ngrok.io -p1234`
 
-## Setting up Teensy loader
-
-```
-sudo apt install -y libusb-dev
-cd ~ && git clone https://github.com/PaulStoffregen/teensy_loader_cli.git
-cd teensy_loader_cli
-make
-```
-
-To push a .hex file to the Teensy, run this command and press the reset button (in either order):
-
-```
-sudo ./teensy_loader_cli --mcu=TEENSY41 -w -v plotter.ino.TEENSY41.hex
-```
-
 ## Niceness
 
 Install Avahi to allow `.local` access: `sudo apt install avahi-daemon`
