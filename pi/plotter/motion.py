@@ -11,16 +11,16 @@ APPROACH_FEED_MM_MIN = 1200
 
 
 def extract_points(payload):
-    if isinstance(payload, dict):
-        if "points" in payload:
-            payload = payload["points"]
-        elif "path" in payload:
-            return extract_points(payload["path"])
-        elif "coordinates" in payload:
-            payload = payload["coordinates"]
+    if not isinstance(payload, dict):
+        raise ValueError("path JSON must contain continuous_path.points")
+    try:
+        payload = payload["continuous_path"]["points"]
+    except (KeyError, TypeError):
+        raise ValueError("path JSON must contain continuous_path.points")
+
     points = np.asarray(payload, dtype=float)
     if points.ndim != 2 or points.shape[1] != 2 or len(points) < 2:
-        raise ValueError("path must contain at least two [x, y] points")
+        raise ValueError("continuous_path.points must contain at least two [x, y] points")
     if not np.isfinite(points).all():
         raise ValueError("path contains non-finite coordinates")
     return points
@@ -52,6 +52,10 @@ def normalize_points(points, margin_mm=DEFAULT_MARGIN_MM, flip_y=True):
         "flip_y": flip_y,
         "normalized_bbox_mm": bbox(normalized),
     }
+
+
+def rotate_points_180(points):
+    return LIMIT_POSITION - points
 
 
 def bbox(points):
@@ -193,6 +197,7 @@ def plan_path(
     path_payload,
     raw=False,
     flip_y=True,
+    rotate_180=False,
     margin_mm=DEFAULT_MARGIN_MM,
     epsilon_mm=DEFAULT_EPSILON_MM,
     min_segment_mm=DEFAULT_MIN_SEGMENT_MM,
@@ -204,8 +209,9 @@ def plan_path(
     else:
         normalized, normalization = normalize_points(original, margin_mm=margin_mm, flip_y=flip_y)
 
-    assert_in_bounds(normalized)
-    cleaned = remove_short_segments(normalized, min_segment_mm=min_segment_mm)
+    transformed = rotate_points_180(normalized) if rotate_180 else normalized
+    assert_in_bounds(transformed)
+    cleaned = remove_short_segments(transformed, min_segment_mm=min_segment_mm)
     simplified = rdp(cleaned, epsilon_mm=epsilon_mm)
     assert_in_bounds(simplified)
     feeds = plan_feeds(simplified)
@@ -217,12 +223,14 @@ def plan_path(
         "stats": {
             "original": path_stats(original),
             "normalized": path_stats(normalized),
+            "transformed": path_stats(transformed),
             "planned": path_stats(simplified, feeds=feeds),
             "normalization": normalization,
             "planner": {
                 "epsilon_mm": epsilon_mm,
                 "margin_mm": margin_mm,
                 "min_segment_mm": min_segment_mm,
+                "rotate_180": rotate_180,
             },
         },
     }

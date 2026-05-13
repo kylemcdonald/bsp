@@ -103,7 +103,11 @@
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          path: scaledPath,
+          path: {
+            continuous_path: {
+              points: scaledPath
+            }
+          },
           raw: true
         }),
       });

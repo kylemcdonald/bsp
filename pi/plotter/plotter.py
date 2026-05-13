@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+import json
 import serial
 import warnings
 import threading
@@ -6,6 +7,7 @@ import time
 import queue
 import time
 from enum import Enum
+from pathlib import Path
 
 import requests
 import flask
@@ -16,6 +18,11 @@ from motion import DEFAULT_EPSILON_MM, plan_path
 home_position = (50, 65)
 limit_position = (100, 100)
 camera_url = 'http://localhost:8081/shutter'
+predefined_button_path = (
+    Path(__file__).resolve().parents[2] /
+    'vectors.json'
+)
+predefined_button_rotate_180 = True
 tinyg_motion_params = {
     'xjm': 2000,
     'yjm': 2000,
@@ -245,6 +252,32 @@ class Plotter(threading.Thread):
 app = Flask(__name__)
 plotter = Plotter(port)
 
+def queue_planned_draw(
+    path_payload,
+    raw=False,
+    flip_y=True,
+    rotate_180=False,
+    epsilon_mm=DEFAULT_EPSILON_MM,
+    source='draw',
+):
+    planned = plan_path(
+        path_payload,
+        raw=raw,
+        flip_y=flip_y,
+        rotate_180=rotate_180,
+        epsilon_mm=epsilon_mm,
+    )
+    stats = planned['stats']
+    log(
+        f'{source}> planned',
+        stats['original']['point_count'], '->',
+        stats['planned']['point_count'], 'points',
+        'length', f"{stats['planned']['path_length_mm']:.1f}mm",
+        'bbox', stats['planned']['bbox_mm']
+    )
+    plotter.draw(planned['commands'])
+    return planned
+
 @app.route('/')
 def index():
     with open('index.html') as f:
@@ -271,27 +304,19 @@ def draw():
         body = {'path': body}
     raw = bool(body.get('raw', False))
     try:
-        planned = plan_path(
+        planned = queue_planned_draw(
             body.get('path', body),
             raw=raw,
             flip_y=bool(body.get('flip_y', not raw)),
+            rotate_180=bool(body.get('rotate_180', False)),
             epsilon_mm=float(body.get('epsilon_mm', DEFAULT_EPSILON_MM)),
         )
     except (KeyError, TypeError, ValueError) as e:
         log('draw> invalid path', e)
         return {'error': str(e)}, 400
-    stats = planned['stats']
-    log(
-        'draw> planned',
-        stats['original']['point_count'], '->',
-        stats['planned']['point_count'], 'points',
-        'length', f"{stats['planned']['path_length_mm']:.1f}mm",
-        'bbox', stats['planned']['bbox_mm']
-    )
-    plotter.draw(planned['commands'])
     return {
         'state': plotter.state.name,
-        'stats': stats,
+        'stats': planned['stats'],
     }, 200
 
 @app.route('/stop')
@@ -310,8 +335,18 @@ def shutter():
 def button():
     log('button> pressed')
     if plotter.state == State.HOME:
-        log('button> shutter()')
-        shutter()
+        log('button> predefined draw()', predefined_button_path)
+        try:
+            with predefined_button_path.open(encoding='utf-8') as f:
+                path_payload = json.load(f)
+            queue_planned_draw(
+                path_payload,
+                rotate_180=predefined_button_rotate_180,
+                source='button',
+            )
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            log('button> predefined draw failed', e)
+            return {'error': str(e)}, 500
     elif plotter.state == State.DRAWING:
         log('button> stop()')
         stop()

@@ -2,6 +2,7 @@
 *.png
 *.bmp
 *.json
+vectors.json
 *.geojson
 *.pyc
 *.hex
