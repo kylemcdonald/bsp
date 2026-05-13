@@ -62,13 +62,13 @@ Lower or asymmetric jerk can be useful, but is not the default yet:
 
 The plotter service now plans incoming `/draw` paths before sending them to TinyG:
 
-* Source paths are uniformly scaled into the `100 x 100mm` plotter area with a `5mm` margin and y-axis flip unless the request uses `raw: true`.
+* Source paths are uniformly scaled into the full `100 x 100mm` plotter area with no default margin and y-axis flip unless the request uses `raw: true`.
 * The planner rejects out-of-bounds raw paths instead of clamping individual points.
 * Consecutive segments shorter than `0.04mm` are dropped.
 * Ramer-Douglas-Peucker simplification runs with default `epsilon_mm=0.10`.
 * Planned commands are `G1` moves with feed rates based on local turn angle and segment length, instead of the old behavior of sending every point as an equal `G0` move.
 
-On the `chatgpt-outline` test path, a `0.10mm` epsilon produces `979` planned points from `3714` source points, keeps the path inside `x=8.835..91.165mm` and `y=5..95mm`, and has an estimated feed-only time of about `51.6s`. In earlier full-path tests, `0.15mm` was slightly faster and smoother than `0.08mm`, but `0.10mm` is a more conservative default for generated portraits until we have visual comparisons with a pen.
+On the `chatgpt-outline` test path, a `0.10mm` epsilon with no margin produces `1042` planned points from `3714` source points, keeps the path inside `x=4.261..95.739mm` and `y=0..100mm`, and has an estimated feed-only time of about `55.8s`. In earlier full-path tests, `0.15mm` was slightly faster and smoother than `0.08mm`, but `0.10mm` is a more conservative default for generated portraits until we have visual comparisons with a pen.
 
 ## Microstep notes
 
