@@ -58,6 +58,18 @@ Lower or asymmetric jerk can be useful, but is not the default yet:
 * `$xjm=1500`, `$yjm=2000`, `$xvm=3000`, `$yvm=3000` sometimes had the best 25mm settle metrics.
 * The result was not enough to replace the simpler symmetric 2000M default before testing real drawing paths.
 
+## Path planner notes
+
+The plotter service now plans incoming `/draw` paths before sending them to TinyG:
+
+* Source paths are uniformly scaled into the `100 x 100mm` plotter area with a `5mm` margin and y-axis flip unless the request uses `raw: true`.
+* The planner rejects out-of-bounds raw paths instead of clamping individual points.
+* Consecutive segments shorter than `0.04mm` are dropped.
+* Ramer-Douglas-Peucker simplification runs with default `epsilon_mm=0.10`.
+* Planned commands are `G1` moves with feed rates based on local turn angle and segment length, instead of the old behavior of sending every point as an equal `G0` move.
+
+On the `chatgpt-outline` test path, a `0.10mm` epsilon produces `979` planned points from `3714` source points, keeps the path inside `x=8.835..91.165mm` and `y=5..95mm`, and has an estimated feed-only time of about `51.6s`. In earlier full-path tests, `0.15mm` was slightly faster and smoother than `0.08mm`, but `0.10mm` is a more conservative default for generated portraits until we have visual comparisons with a pen.
+
 ## Microstep notes
 
 Microsteps were tested by changing `$1mi`, `$2mi`, and `$3mi` together to `1`, `2`, `4`, and `8`. TinyG was reset after each change, the current physical home position was redefined, and cautious centered moves were run from 1mm upward.
@@ -74,7 +86,7 @@ Reset TinyG after changing microsteps. Without a reset and coordinate redefiniti
 Things to look into:
 
 * What is the ideal current? We can change the trim pots to adjust this. The iPhone tests suggest jerk and microsteps are the first controls to tune; current still needs a physical trim-pot experiment.
-* How should the motion planner adapt speed and cornering based on path geometry?
+* Should the planner add true corner rounding or arc fitting after we compare the `0.10mm` simplified drawings visually?
 
 # Notes
 

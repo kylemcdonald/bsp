@@ -97,7 +97,6 @@
         limit - (x * scale),
         (y * scale)
       ]);
-      const speed = document.getElementById("speed").value;
       fetch("/draw", {
         method: "POST",
         headers: {
@@ -105,7 +104,6 @@
         },
         body: JSON.stringify({
           path: scaledPath,
-          speed: speed,
           raw: true
         }),
       });
@@ -129,10 +127,6 @@
     Circle
   </div>
   <div id="container"></div>
-  <div>
-    <input type="range" min="1" max="6000" value="6000" id="speed" />
-    Speed
-  </div>
   <button onclick="send()">Send</button>
   <button onclick="sendWithDelay()">Send with delay</button>
   <button onclick="fetch('/stop')">Stop</button>
