@@ -11,16 +11,22 @@ APPROACH_FEED_MM_MIN = 1200
 
 
 def extract_points(payload):
-    if not isinstance(payload, dict):
-        raise ValueError("path JSON must contain continuous_path.points")
-    try:
-        payload = payload["continuous_path"]["points"]
-    except (KeyError, TypeError):
-        raise ValueError("path JSON must contain continuous_path.points")
+    if isinstance(payload, dict):
+        if "vector" in payload:
+            payload = payload["vector"]
+        if "continuous_path" in payload:
+            try:
+                payload = payload["continuous_path"]["points"]
+            except (KeyError, TypeError):
+                raise ValueError("path JSON continuous_path must contain points")
+        elif "coordinates" in payload:
+            payload = payload["coordinates"]
+        elif "path" in payload:
+            payload = payload["path"]
 
     points = np.asarray(payload, dtype=float)
     if points.ndim != 2 or points.shape[1] != 2 or len(points) < 2:
-        raise ValueError("continuous_path.points must contain at least two [x, y] points")
+        raise ValueError("path must contain at least two [x, y] points")
     if not np.isfinite(points).all():
         raise ValueError("path contains non-finite coordinates")
     return points

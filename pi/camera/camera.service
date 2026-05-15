@@ -1,13 +1,17 @@
 [Unit]
 Description=Camera Service
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-User=root
+User=ubuntu
+Group=ubuntu
+SupplementaryGroups=video
 WorkingDirectory=/home/ubuntu/bsp/pi/camera/
-ExecStart=/home/ubuntu/bsp/pi/camera/camera.py
+EnvironmentFile=-/etc/bsp.env
+ExecStart=/home/ubuntu/bsp/.venv/bin/python /home/ubuntu/bsp/pi/camera/camera.py
 Restart=always
-StandardOutput=syslog
-StandardError=syslog
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target

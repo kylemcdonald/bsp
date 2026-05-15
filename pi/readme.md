@@ -1,162 +1,244 @@
-# Setting up the Raspberry Pi
+# Setting Up the Raspberry Pi
 
-Install the Ubuntu 20.04 64-bit OS to a 32GB+ SD Card.
+This Pi runs three small services:
 
-Start the Pi, find the ip address and ssh into it. It will ask you to change the password. Exit ssh and run `ssh-copy-id` to enable passwordless ssh.
+- `plotter`: receives planned vector paths and streams G-code to TinyG.
+- `camera`: captures a full webcam JPEG and sends it to the local-network processor.
+- `button`: watches the GPIO button and calls the plotter service.
 
-[Disable updates](https://www.reddit.com/r/linuxadmin/comments/kvcfv0/ubuntu_unattendedupgrades_other/gizk3z8/):
+The Pi no longer runs local face detection, eye detection, blink detection, dlib,
+TFLite, or Coral code. The camera service sends the full `.jpg` to
+`vibecheck.local`, and that nearby machine is responsible for image
+analysis/cropping/vectorization.
 
-```
-sudo systemctl disable --now apt-daily{{,-upgrade}.service,{,-upgrade}.timer}
-sudo systemctl disable --now unattended-upgrades
-sudo systemctl daemon-reload
-sudo systemctl stop unattended-upgrades
-sudo systemctl mask unattended-upgrades
-```
+## OS
 
-`sudo reboot now` then log back in and upgrade `sudo apt update && sudo apt full-upgrade -y`
+Use a current 64-bit OS. Preferred:
 
-Disable snapd to free some RAM:
+- Raspberry Pi OS Lite 64-bit
+- Ubuntu Server 24.04 LTS 64-bit
 
-```
-sudo systemctl stop snapd
-sudo systemctl mask snapd
-```
+Avoid a fresh Ubuntu 20.04 install. It is past standard support.
 
-Install other dependencies:
+After first boot:
 
-```
+```sh
 sudo apt update
-sudo apt install -y \
-    python3-pip
-sudo dphys-swapfile install
-sudo pip3 install \
-    RPi.GPIO \
-    gpiozero \
-    opencv-python-headless \
-    pyserial \
-    flask \
-    waitress \
-    requests 
+sudo apt full-upgrade -y
+sudo reboot
 ```
 
-Install tflite:
+Optional but useful:
 
-```
-echo "deb https://packages.cloud.google.com/apt coral-edgetpu-stable main" | sudo tee /etc/apt/sources.list.d/coral-edgetpu.list
-curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
-sudo apt update
-sudo apt install python3-tflite-runtime
-```
-
-Install dlib, including `dphys-swapfile` for the 2GB Raspberry Pi in order to have the memory to build dlib:
-
-```
-sudo apt install -y \
-    cmake \
-    dphys-swapfile
-sudo dphys-swapfile swapon
-sudo pip3 install dlib
-sudo dphys-swapfile swapoff
-```
-
-Enable gpio permissions [for all users](https://github.com/gpiozero/gpiozero/issues/837#issuecomment-703743142): `sudo chmod og+rwx /dev/gpio*`.
-
-Setup the shutdown service:
-
-```
-cd ~/bsp/pi/shutdown
-bash install-shutdown.sh
-```
-
-Setup the plotter service:
-
-```
-cd ~/bsp/pi/plotter
-bash install-plotter.sh
-```
-
-Setup the camera service:
-
-```
-cd ~/bsp/pi/camera
-bash install-camera.sh
-```
-
-## Remote access
-
-Install and connect to Zerotier `NETWORK_ID`:
-
-```
-curl -s https://install.zerotier.com | sudo bash
-sudo zerotier-cli $NETWORK_ID
-```
-
-Zerotier creates a VPN. Access the pi with `ssh ubuntu@ubuntu.local`
-
-Download and install ngrok using `AUTH_TOKEN`:
-
-```
-sudo apt install unzip
-cd ~
-wget https://raw.githubusercontent.com/vincenthsu/systemd-ngrok/master/install.sh
-sed -i "s/amd64/arm64/g" install.sh
-sudo bash install.sh $AUTH_TOKEN
-sudo rm -rf install.sh systemd-ngrok 
-```
-
-ngrok tunnels a port to ssh. If ngrok says the service is running at `tcp://0.tcp.ngrok.io:1234` then access the pi with `ssh ubuntu@0.tcp.ngrok.io -p1234`
-
-## Niceness
-
-Install Avahi to allow `.local` access: `sudo apt install avahi-daemon`
-
-Then change the hostname and restart Avahi:
-
-```
+```sh
+sudo apt install -y avahi-daemon
 sudo hostnamectl set-hostname "bsp-install"
 sudo systemctl restart avahi-daemon
 ```
 
-Simplify the login message:
+## Checkout
 
-```
-sudo chmod -x /etc/update-motd.d/{10-help-text,50-motd-news,90-updates-available,91-release-upgrade,92-unattended-upgrades}
-```
+The service files assume this checkout:
 
-systemctl will say "status degraded" unless you disable motd completely. This might render the above unnecessary:
-
-```
-sudo systemctl stop motd-news
-sudo systemctl mask motd-news
-sudo systemctl reset-failed
+```sh
+cd ~
+git clone <repo-url> bsp
+cd ~/bsp
 ```
 
-With ngrok exposing the machine publicly, [disable ssh passwords](https://www.cyberciti.biz/faq/how-to-disable-ssh-password-login-on-linux/).
+If you use a different user or path, update the `.service` files and scripts.
 
-## Possible problems
+## Install System Dependencies
 
-If you don't enable gpio permissions, RPi.GPIO or gpiozero will say `Not running on a RPi!`.
+Run this once on the Pi:
 
-RPi.GPIO does not support `wait_for_edge` on newer operating systems, possibly [due to a kernel deprecation](https://sourceforge.net/p/raspberry-gpio-python/tickets/175/). It will say `RuntimeError: Error waiting for edge` if you try to `wait_for_edge`. Simply creating a `Button` with `gpiozero` will cause `RuntimeError: Failed to add edge detection`.
+```sh
+cd ~/bsp
+bash pi/install-system-deps.sh
+```
 
-The Python libraries must be installed with sudo, and the shutdown service must run as root. Otherwise systemctl will read: `Failed to start Shutdown Service.` There may also be a way to configure `PYTHONPATH` to correctly find the libraries install for the local user.
+This installs the OS-managed hardware packages:
 
-## Correct configuration
+- `python3-gpiozero` for the button and LED
+- `python3-opencv` and `python3-numpy` for webcam capture/JPEG encoding
+- `v4l-utils` for camera inspection/debugging
+- `python3-venv` and `python3-pip` for the project venv
 
-When the USB devices are correctly plugged in, `./uhubctl` should report:
+It also creates a `gpio` group/udev rule for GPIO devices and adds the `ubuntu`
+user to hardware groups:
 
-```console
-Current status for hub 2 [1d6b:0003 Linux 5.4.0-1028-raspi xhci-hcd xHCI Host Controller 0000:01:00.0, USB 3.00, 4 ports, ppps]
-  Port 1: 02a0 power 5gbps Rx.Detect
-  Port 2: 0203 power 5gbps U0 enable connect [046d:085e Logitech BRIO 90023138]
-  Port 3: 02a0 power 5gbps Rx.Detect
-  Port 4: 02a0 power 5gbps Rx.Detect
-Current status for hub 1-1 [2109:3431 USB2.0 Hub, USB 2.10, 4 ports, ppps]
-  Port 1: 0100 power
-  Port 2: 0100 power
-  Port 3: 0100 power
-  Port 4: 0103 power enable connect [0403:6015 FTDI FT230X Basic UART D308QQ85]
-Current status for hub 1 [1d6b:0002 Linux 5.4.0-1028-raspi xhci-hcd xHCI Host Controller 0000:01:00.0, USB 2.00, 1 ports, ppps]
-  Port 1: 0503 power highspeed enable connect [2109:3431 USB2.0 Hub, USB 2.10, 4 ports, ppps]
-  ```
+- `dialout` for TinyG serial
+- `video` for the webcam
+- `gpio` for GPIO access
+
+Log out and back in, or reboot, after group changes:
+
+```sh
+sudo reboot
+```
+
+## Python Environment
+
+The project uses a venv at `~/bsp/.venv`, but it is created with
+`--system-site-packages` so it can use apt-managed Pi hardware packages such as
+`cv2`, `gpiozero`, and `numpy`.
+
+To recreate only the Python venv:
+
+```sh
+cd ~/bsp
+bash pi/setup-venv.sh
+```
+
+The pip-managed Pi dependencies are listed in `pi/requirements-pi.txt`:
+
+- `flask`
+- `waitress`
+- `requests`
+- `pyserial`
+
+Do not use `sudo pip3 install` for this app. Keep OS/hardware packages in apt
+and app-level packages in the venv.
+
+## Shutdown Permission
+
+The button service runs as the normal `ubuntu` user. Long-press shutdown is
+allowed through a narrow sudoers rule installed by `pi/install-system-deps.sh`:
+
+```sudoers
+ubuntu ALL=(root) NOPASSWD: /usr/sbin/shutdown -h now
+```
+
+The button code calls exactly:
+
+```sh
+sudo /usr/sbin/shutdown -h now
+```
+
+This avoids running the whole button service as root.
+
+## Install Services
+
+After dependencies are installed and the Pi has been rebooted for group
+membership:
+
+```sh
+cd ~/bsp
+bash pi/install-services.sh
+```
+
+This installs:
+
+- `/etc/systemd/system/plotter.service`
+- `/etc/systemd/system/camera.service`
+- `/etc/systemd/system/button.service`
+
+Useful commands:
+
+```sh
+systemctl status plotter camera button
+journalctl -u plotter -f
+journalctl -u camera -f
+journalctl -u button -f
+```
+
+## Configuration
+
+The services optionally read `/etc/bsp.env`.
+
+Create it if the processor endpoint or local ports need to change:
+
+```sh
+sudo cp ~/bsp/pi/bsp.env.example /etc/bsp.env
+sudo nano /etc/bsp.env
+sudo systemctl restart camera plotter
+```
+
+Available settings:
+
+- `BSP_VIBECHECK_URL`: base URL for the face/vector processing API, default `http://vibecheck.local:8787`
+- `BSP_PROCESS_URL`: optional full process endpoint override, default `$BSP_VIBECHECK_URL/api/process`
+- `BSP_PLOTTER_DRAW_URL`: local plotter draw endpoint used by the camera
+- `BSP_CAMERA_SHUTTER_URL`: local camera shutter endpoint used by the plotter
+- `BSP_TINYG_PORT`: optional TinyG serial device override, for example `/dev/ttyUSB0`
+
+## Hardware Checks
+
+Check the webcam:
+
+```sh
+v4l2-ctl --list-devices
+v4l2-ctl --device=/dev/video0 --list-formats-ext
+```
+
+Check TinyG serial:
+
+```sh
+~/bsp/.venv/bin/python -m serial.tools.list_ports -v
+```
+
+The plotter service searches for an FTDI device matching `FT230X`.
+
+## Service Endpoints
+
+Plotter:
+
+- `GET http://localhost:8080/status`
+- `GET http://localhost:8080/home`
+- `GET http://localhost:8080/stop`
+- `POST http://localhost:8080/draw`
+
+Camera:
+
+- `GET http://localhost:8081/shutter`
+
+Button:
+
+- short press calls `http://localhost:8080/button`
+- long press homes the plotter and shuts down the Pi
+
+## Processor Response Schema
+
+The plotter now accepts either of these path payloads:
+
+```json
+{"coordinates": [[0, 0], [1, 1]]}
+```
+
+or:
+
+```json
+{"continuous_path": {"points": [[0, 0], [1, 1]]}}
+```
+
+or the full process API shape:
+
+```json
+{"vector": {"continuous_path": {"points": [[0, 0], [1, 1]]}}}
+```
+
+The camera service forwards the `vector` object from the process response to the
+plotter as the `path` value.
+
+## Removed Legacy Setup
+
+Do not install these on the Pi for the current pipeline:
+
+- `dlib`
+- `python3-tflite-runtime`
+- Coral/EdgeTPU apt repositories
+- local face/eye/blink model files
+- custom OpenCV builds
+- swap changes solely for compiling dlib
+
+Those were only needed for the old local preprocessing path.
+
+## Remote Access
+
+For LAN access, Avahi provides `.local` hostnames:
+
+```sh
+ssh ubuntu@bsp-install.local
+```
+
+If exposing SSH through a tunnel, disable password login and use SSH keys only.

@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 import json
+import os
 import serial
 import warnings
 import threading
@@ -14,10 +15,12 @@ import flask
 from flask import Flask
 from waitress import serve
 from motion import DEFAULT_EPSILON_MM, plan_path
+from serial.tools import list_ports
 
 home_position = (50, 65)
 limit_position = (100, 100)
-camera_url = 'http://localhost:8081/shutter'
+camera_url = os.environ.get('BSP_CAMERA_SHUTTER_URL', 'http://localhost:8081/shutter')
+tinyg_port = os.environ.get('BSP_TINYG_PORT')
 predefined_button_path = (
     Path(__file__).resolve().parents[2] /
     'vectors.json'
@@ -29,13 +32,7 @@ tinyg_motion_params = {
     'xvm': 3000,
     'yvm': 3000,
 }
-
-from serial.tools import list_ports
-try:
-    port = next(list_ports.grep('FT230X'))
-    port = port.device
-except StopIteration:
-    port = None
+reconnect_interval = 1
 
 State = Enum('State', 'HOME DRAWING POSTDRAW')
 
@@ -46,16 +43,30 @@ def log(*args):
 
 class FakeSerial:
     def __init__(self):
-        pass
+        self.timeout = 0
         
     def write(self, msg):
         log('serial> write', msg)
+
+    def flush(self):
+        pass
 
     def read_until(self):
         return b''
         
     def read(self):
         return b''
+
+    def close(self):
+        pass
+
+def find_tinyg_port():
+    if tinyg_port:
+        return tinyg_port
+    try:
+        return next(list_ports.grep('FT230X')).device
+    except StopIteration:
+        return None
 
 def clamp(x, name, min_value=None, max_value=None):
     if min_value is not None and x < min_value:
@@ -69,34 +80,83 @@ def clamp(x, name, min_value=None, max_value=None):
 class Plotter(threading.Thread):
     def __init__(self, port=None, baudrate=115200):
         super().__init__()
-        if port is None:
-            log('no serial port available')
-            self.ser = FakeSerial()
-        else:
-            log('using port', port)
-            self.ser = serial.Serial(port, baudrate, timeout=2, write_timeout=2, rtscts=True)
-            self.ser.reset_input_buffer()
-            print('plotter> restarting')
-            time.sleep(1)
-            self.ser.write(chr(24).encode('ascii'))
-            self.ser.flush()
-            print('plotter> waiting for startup')
-            startup = self.wait_for_startup()
-            print('plotter> got startup:', startup)
-            self.configure_tinyg()
-        self.ready = True
+        self.port = port
+        self.baudrate = baudrate
+        self.ser = FakeSerial()
+        self.connected = False
         self.queue = queue.Queue()
         self.shutdown = threading.Event()
         self.clear = threading.Event()
         self.state = State.HOME
+        self.ready = True
 
-        # hit limits and go home on start
+        if self.connect():
+            self.initialize_position()
+
+        self.start()
+
+    def initialize_position(self):
+        # hit limits and go home on start or reconnect
+        self.clear_queue()
         self.define_position(*home_position)
         self.go(0, 0)
         self.go(*limit_position)
         self.home()
 
-        self.start()
+    def connect(self):
+        port = self.port or find_tinyg_port()
+        if port is None:
+            log('plotter> TinyG serial port not available')
+            return False
+        try:
+            log('plotter> connecting to port', port)
+            ser = serial.Serial(
+                port,
+                self.baudrate,
+                timeout=2,
+                write_timeout=2,
+                rtscts=True,
+            )
+            ser.reset_input_buffer()
+            self.ser = ser
+            self.port = port
+            log('plotter> restarting TinyG')
+            time.sleep(1)
+            self.ser.write(chr(24).encode('ascii'))
+            self.ser.flush()
+            log('plotter> waiting for startup')
+            startup = self.wait_for_startup()
+            log('plotter> got startup:', startup)
+            self.configure_tinyg()
+            self.connected = True
+            return True
+        except serial.SerialException as e:
+            log('plotter> serial connection failed', e)
+        except OSError as e:
+            log('plotter> serial connection failed', e)
+        self.connected = False
+        try:
+            self.ser.close()
+        except Exception:
+            pass
+        self.ser = FakeSerial()
+        return False
+
+    def disconnect(self):
+        if self.connected:
+            log('plotter> disconnected from TinyG')
+        self.connected = False
+        self.clear_queue()
+        try:
+            self.ser.close()
+        except Exception:
+            pass
+        self.ser = FakeSerial()
+        self.state = State.HOME
+
+    def clear_queue(self):
+        with self.queue.mutex:
+            self.queue.queue.clear()
 
     def wait_for_startup(self, timeout=8):
         deadline = time.time() + timeout
@@ -158,12 +218,17 @@ class Plotter(threading.Thread):
         self.clear.set()
 
     def go(self, x, y):
+        if not self.connected:
+            log('plotter> ignoring go while disconnected')
+            return
         x = clamp(x, 'x', 0, limit_position[0])
         y = clamp(y, 'y', 0, limit_position[1])
         self.queue.put(f'g0x{x:.4f}y{y:.4f}\n')
         self.state = State.DRAWING
 
     def draw(self, commands):
+        if not self.connected:
+            raise RuntimeError('plotter is disconnected')
         for command in commands:
             self.queue.put(f'{command}\n')
         self.state = State.DRAWING
@@ -181,8 +246,16 @@ class Plotter(threading.Thread):
         blast_size = 4
         read_queue_size = 0
         queue_previously_empty = True
+        next_reconnect = 0
         while not self.shutdown.is_set():
             time.sleep(0.01)
+            if not self.connected:
+                if time.time() >= next_reconnect:
+                    if self.connect():
+                        self.initialize_position()
+                        read_queue_size = 0
+                    next_reconnect = time.time() + reconnect_interval
+                continue
             try:
                 if self.clear.is_set():
                     # then send hold and request tinyg queue flush
@@ -191,7 +264,7 @@ class Plotter(threading.Thread):
                     # these are both single character commands, no newline needed
                     msg = '!%'
                     log(f'plotter> clearing queue')
-                    self.queue.queue.clear()
+                    self.clear_queue()
                     self.clear.clear()
                 else:
                     msg = self.queue.get(timeout=1)
@@ -205,6 +278,12 @@ class Plotter(threading.Thread):
                     log('plotter> queue empty')
                 queue_previously_empty = True
                 pass
+            except (serial.SerialTimeoutException, serial.SerialException) as e:
+                log('plotter> serial write error', e)
+                read_queue_size = 0
+                self.disconnect()
+                time.sleep(1)
+                continue
             try:
                 if read_queue_size < blast_size and not self.queue.empty():
                     # log(f'plotter> blast-write to fill buffer', read_queue_size)
@@ -246,11 +325,12 @@ class Plotter(threading.Thread):
             except serial.SerialException as e:
                 log('plotter> serial error', e)
                 read_queue_size = 0
+                self.disconnect()
                 time.sleep(1)
         log('plotter> received shutdown')
 
 app = Flask(__name__)
-plotter = Plotter(port)
+plotter = Plotter(tinyg_port)
 
 def queue_planned_draw(
     path_payload,
@@ -285,6 +365,8 @@ def index():
 
 @app.route('/go')
 def go():
+    if not plotter.connected:
+        return {'error': 'plotter is disconnected'}, 503
     req = flask.request
     x = int(req.args.get('x'))
     y = int(req.args.get('y'))
@@ -293,11 +375,15 @@ def go():
 
 @app.route('/home')
 def home():
+    if not plotter.connected:
+        return {'error': 'plotter is disconnected'}, 503
     plotter.home()
     return '',200
 
 @app.route('/draw', methods=['POST'])
 def draw():
+    if not plotter.connected:
+        return {'error': 'plotter is disconnected'}, 503
     req = flask.request
     body = req.get_json(silent=True)
     if not isinstance(body, dict):
@@ -311,7 +397,7 @@ def draw():
             rotate_180=bool(body.get('rotate_180', False)),
             epsilon_mm=float(body.get('epsilon_mm', DEFAULT_EPSILON_MM)),
         )
-    except (KeyError, TypeError, ValueError) as e:
+    except (KeyError, TypeError, ValueError, RuntimeError) as e:
         log('draw> invalid path', e)
         return {'error': str(e)}, 400
     return {
@@ -321,6 +407,8 @@ def draw():
 
 @app.route('/stop')
 def stop():
+    if not plotter.connected:
+        return {'error': 'plotter is disconnected'}, 503
     plotter.stop()
     # plotter.home()
     return '',200
@@ -344,7 +432,7 @@ def button():
                 rotate_180=predefined_button_rotate_180,
                 source='button',
             )
-        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError, RuntimeError) as e:
             log('button> predefined draw failed', e)
             return {'error': str(e)}, 500
     elif plotter.state == State.DRAWING:
@@ -357,7 +445,11 @@ def button():
 
 @app.route('/status')	
 def status():
-    return {'state': plotter.state.name}
+    return {
+        'state': plotter.state.name,
+        'connected': plotter.connected,
+        'port': plotter.port,
+    }
 
 serve(app, listen='*:8080')
 plotter.join()

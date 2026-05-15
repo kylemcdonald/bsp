@@ -4,21 +4,41 @@ import time
 import threading
 import datetime
 import os
-from simplejson.errors import JSONDecodeError
 
 import requests
 from flask import Flask
 from waitress import serve
 
 from flushed import log
-from face_extractor import FaceExtractor
 from wait_for_format import wait_for_format
 
-gce_url = 'http://bsp-ams.kylemcdonald.net:8080'
-plotter_url = 'http://localhost:8080/draw'
+api_base_url = (os.environ.get('BSP_VIBECHECK_URL') or 'http://vibecheck.local:8787').rstrip('/')
+process_url = os.environ.get('BSP_PROCESS_URL') or f'{api_base_url}/api/process'
+plotter_url = os.environ.get('BSP_PLOTTER_DRAW_URL', 'http://localhost:8080/draw')
 jpeg_quality = 90
+request_timeout = 120
 
-log('using endpoint', gce_url)
+log('using process endpoint', process_url)
+
+def count_points(path_payload):
+    if not isinstance(path_payload, dict):
+        return None
+    if 'coordinates' in path_payload:
+        return len(path_payload['coordinates'])
+    if 'vector' in path_payload:
+        return count_points(path_payload['vector'])
+    try:
+        return len(path_payload['continuous_path']['points'])
+    except (KeyError, TypeError):
+        return None
+
+def extract_vector_payload(process_payload):
+    if not isinstance(process_payload, dict):
+        raise ValueError('process response must be a JSON object')
+    vector_payload = process_payload.get('vector', process_payload)
+    if count_points(vector_payload) is None:
+        raise ValueError('process response did not contain vector.continuous_path.points')
+    return vector_payload
 
 def save_to_disk(data, directory, extension):
     now = datetime.datetime.now()
@@ -42,10 +62,6 @@ class Camera(threading.Thread):
         cap = wait_for_format(fourcc, width, height, fps)
         log('camera> camera is available')
 
-        log('camera> loading face extractor')
-        self.face_extractor = FaceExtractor()
-        log('camera> loaded face extractor')
-
         self.cap = cap
         self.shutdown = threading.Event()
         self.shutter = threading.Event()
@@ -61,55 +77,57 @@ class Camera(threading.Thread):
 
         log('camera> capture')
         ret, img = self.cap.read()
-
-        log('camera> extracting face')
-        try:
-            sub = self.face_extractor(img)
-        except:
-            log('camera> error extracting face, saving image to disk')
-            _, encimg = cv2.imencode('.jpg', img, encode_param)
-            save_to_disk(encimg, 'error', '.jpg')
+        if not ret:
+            log('camera> capture failed')
             return
 
-        log('camera> convert to jpg for post')
-        _, encimg = cv2.imencode('.jpg', sub, encode_param)
+        log('camera> convert full frame to jpg for post')
+        ok, encimg = cv2.imencode('.jpg', img, encode_param)
+        if not ok:
+            log('camera> jpg encode failed')
+            return
 
-        save_to_disk(encimg, 'faces', '.jpg')
+        save_to_disk(encimg, 'images', '.jpg')
 
         # send to endpoint
         data = encimg.tobytes()
-        headers = {'Content-type': 'image/jpeg'}
+        files = {
+            'image': ('capture.jpg', data, 'image/jpeg'),
+        }
         try:
-            log('camera> post jpg')
-            response = requests.post(gce_url, data=data, headers=headers)
-            log('camera> response')
-            data = response.json()['coordinates']
-            log(f'camera> gce response {len(data)} points')
-            response = requests.post(plotter_url, json={'path':data})
-        except ConnectionError:
+            log('camera> post jpg to process api')
+            response = requests.post(
+                process_url,
+                files=files,
+                timeout=request_timeout,
+            )
+            response.raise_for_status()
+            process_payload = response.json()
+            vector_payload = extract_vector_payload(process_payload)
+            point_count = count_points(vector_payload)
+            if point_count is None:
+                log('camera> process response received')
+            else:
+                log(f'camera> process response {point_count} points')
+            response = requests.post(
+                plotter_url,
+                json={'path': vector_payload},
+                timeout=request_timeout,
+            )
+            response.raise_for_status()
+        except requests.exceptions.ConnectionError:
             log('camera> connection error')
-        except JSONDecodeError:
+        except requests.exceptions.Timeout:
+            log('camera> request timeout')
+        except requests.exceptions.HTTPError as e:
+            log('camera> http error', e)
+        except requests.exceptions.JSONDecodeError:
             log('camera> JSON response error')
-            log(response.raw)
-
-        log('camera> convert to jpg and save to disk')
-        _, encimg = cv2.imencode('.jpg', img, encode_param)
-        save_to_disk(encimg, 'images', '.jpg')
+        except ValueError as e:
+            log('camera> invalid process response', e)
 
     def run(self):
-        last_time = time.time()
         while not self.shutdown.is_set():
-            # now = time.time()
-            # if now - last_time > 5:
-            #     print('camera> grabbing reference')
-            #     ret, img = self.cap.read()
-            #     log('camera> convert to jpg')
-            #     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
-            #     _, encimg = cv2.imencode('.jpg', img, encode_param)
-            #     log('camera> save to disk')
-            #     save_to_disk(encimg, 'references', '.jpg')
-            #     last_time = now
-
             # run through the buffer to stay up to date
             ret = self.cap.grab()
 
