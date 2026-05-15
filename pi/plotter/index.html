@@ -13,6 +13,15 @@
       margin: 0.5em 0;
       font-size: 1em;
     }
+
+    .row {
+      margin: 0.5em 0;
+    }
+
+    #upload-status {
+      font-family: monospace;
+      white-space: pre-wrap;
+    }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/p5@1.2.0/lib/p5.js"></script>
   <script>
@@ -116,6 +125,48 @@
     function sendWithDelay() {
       setTimeout(send, 2000);
     }
+
+    function uploadJson() {
+      const input = document.getElementById("json-file");
+      const status = document.getElementById("upload-status");
+      const file = input.files[0];
+      if (!file) {
+        status.innerText = "Choose a JSON file first.";
+        return;
+      }
+      status.innerText = "Reading...";
+      file.text()
+        .then((text) => JSON.parse(text))
+        .then((json) => {
+          status.innerText = "Uploading...";
+          return fetch("/draw", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(json),
+          });
+        })
+        .then(async (response) => {
+          const body = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(body.error || response.statusText);
+          }
+          return body;
+        })
+        .then((body) => {
+          const planned = body.stats && body.stats.planned;
+          if (planned) {
+            status.innerText = `Queued ${planned.point_count} points, ${planned.path_length_mm.toFixed(1)}mm`;
+          } else {
+            status.innerText = "Queued";
+          }
+          checkStatus();
+        })
+        .catch((error) => {
+          status.innerText = `Upload failed: ${error.message}`;
+        });
+    }
   </script>
 </head>
 
@@ -135,6 +186,11 @@
   <button onclick="sendWithDelay()">Send with delay</button>
   <button onclick="fetch('/stop')">Stop</button>
   <button onclick="fetch('/button')">Button</button>
+  <div class="row">
+    <input id="json-file" type="file" accept="application/json,.json" />
+    <button onclick="uploadJson()">Upload JSON and Plot</button>
+    <div id="upload-status"></div>
+  </div>
   <div style="font-family: monospace">
     Status:
     <span id="status"></span>

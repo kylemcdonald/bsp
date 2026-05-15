@@ -8,7 +8,6 @@ import time
 import queue
 import time
 from enum import Enum
-from pathlib import Path
 
 import requests
 import flask
@@ -21,11 +20,6 @@ home_position = (50, 65)
 limit_position = (100, 100)
 camera_url = os.environ.get('BSP_CAMERA_SHUTTER_URL', 'http://localhost:8081/shutter')
 tinyg_port = os.environ.get('BSP_TINYG_PORT')
-predefined_button_path = (
-    Path(__file__).resolve().parents[2] /
-    'vectors.json'
-)
-predefined_button_rotate_180 = True
 tinyg_motion_params = {
     'xjm': 2000,
     'yjm': 2000,
@@ -358,6 +352,25 @@ def queue_planned_draw(
     plotter.draw(planned['commands'])
     return planned
 
+def draw_payload(body, source='draw'):
+    if not isinstance(body, dict):
+        body = {'path': body}
+    raw = bool(body.get('raw', False))
+    return queue_planned_draw(
+        body.get('path', body),
+        raw=raw,
+        flip_y=bool(body.get('flip_y', not raw)),
+        rotate_180=bool(body.get('rotate_180', False)),
+        epsilon_mm=float(body.get('epsilon_mm', DEFAULT_EPSILON_MM)),
+        source=source,
+    )
+
+def planned_response(planned):
+    return {
+        'state': plotter.state.name,
+        'stats': planned['stats'],
+    }, 200
+
 @app.route('/')
 def index():
     with open('index.html') as f:
@@ -386,24 +399,42 @@ def draw():
         return {'error': 'plotter is disconnected'}, 503
     req = flask.request
     body = req.get_json(silent=True)
-    if not isinstance(body, dict):
-        body = {'path': body}
-    raw = bool(body.get('raw', False))
     try:
-        planned = queue_planned_draw(
-            body.get('path', body),
-            raw=raw,
-            flip_y=bool(body.get('flip_y', not raw)),
-            rotate_180=bool(body.get('rotate_180', False)),
-            epsilon_mm=float(body.get('epsilon_mm', DEFAULT_EPSILON_MM)),
-        )
+        planned = draw_payload(body)
     except (KeyError, TypeError, ValueError, RuntimeError) as e:
         log('draw> invalid path', e)
         return {'error': str(e)}, 400
-    return {
-        'state': plotter.state.name,
-        'stats': planned['stats'],
-    }, 200
+    return planned_response(planned)
+
+@app.route('/draw-json', methods=['POST'])
+def draw_json():
+    if not plotter.connected:
+        return {'error': 'plotter is disconnected'}, 503
+    upload = flask.request.files.get('json') or flask.request.files.get('file')
+    if upload is None or upload.filename == '':
+        return {'error': 'missing JSON upload'}, 400
+    try:
+        body = json.load(upload.stream)
+        form = flask.request.form
+        options = {}
+        if 'raw' in form:
+            options['raw'] = form.get('raw') == 'true'
+        if 'flip_y' in form:
+            options['flip_y'] = form.get('flip_y') == 'true'
+        if 'rotate_180' in form:
+            options['rotate_180'] = form.get('rotate_180') == 'true'
+        if 'epsilon_mm' in form:
+            options['epsilon_mm'] = form.get('epsilon_mm')
+        if options:
+            body = {'path': body, **options}
+        planned = draw_payload(body, source='draw-json')
+    except json.JSONDecodeError as e:
+        log('draw-json> invalid JSON', e)
+        return {'error': 'invalid JSON upload'}, 400
+    except (KeyError, TypeError, ValueError, RuntimeError) as e:
+        log('draw-json> invalid path', e)
+        return {'error': str(e)}, 400
+    return planned_response(planned)
 
 @app.route('/stop')
 def stop():
@@ -416,25 +447,20 @@ def stop():
 @app.route('/shutter')
 def shutter():
     log('shutter> pressed')
-    requests.get(camera_url)
+    try:
+        response = requests.get(camera_url, timeout=5)
+        response.raise_for_status()
+    except requests.RequestException as e:
+        log('shutter> camera request failed', e)
+        return {'error': str(e)}, 502
     return '',200
 
 @app.route('/button')
 def button():
     log('button> pressed')
     if plotter.state == State.HOME:
-        log('button> predefined draw()', predefined_button_path)
-        try:
-            with predefined_button_path.open(encoding='utf-8') as f:
-                path_payload = json.load(f)
-            queue_planned_draw(
-                path_payload,
-                rotate_180=predefined_button_rotate_180,
-                source='button',
-            )
-        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError, RuntimeError) as e:
-            log('button> predefined draw failed', e)
-            return {'error': str(e)}, 500
+        log('button> shutter()')
+        return shutter()
     elif plotter.state == State.DRAWING:
         log('button> stop()')
         stop()

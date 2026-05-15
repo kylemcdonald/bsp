@@ -187,6 +187,7 @@ Plotter:
 - `GET http://localhost:8080/home`
 - `GET http://localhost:8080/stop`
 - `POST http://localhost:8080/draw`
+- `POST http://localhost:8080/draw-json`
 
 Camera:
 
@@ -194,7 +195,7 @@ Camera:
 
 Button:
 
-- short press calls `http://localhost:8080/button`
+- short press calls `http://localhost:8080/button`; when the plotter is home this triggers a camera capture, and when drawing it stops the plotter
 - long press homes the plotter and shuts down the Pi
 
 ## Processor Response Schema

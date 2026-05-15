@@ -69,7 +69,7 @@ The plotter service now plans incoming `/draw` paths before sending them to Tiny
 * Ramer-Douglas-Peucker simplification runs with default `epsilon_mm=0.10`.
 * Planned commands are `G1` moves with feed rates based on local turn angle and segment length, instead of the old behavior of sending every point as an equal `G0` move.
 
-On the current `vectors.json` test path, a `0.10mm` epsilon with no margin and `rotate_180` enabled produces `1171` planned points from `5177` source points, keeps the path inside `x=0.282..99.718mm` and `y=0..100mm`, and has an estimated feed-only time of about `80.8s`. In earlier full-path tests, `0.15mm` was slightly faster and smoother than `0.08mm`, but `0.10mm` is a more conservative default for generated portraits until we have visual comparisons with a pen.
+On an earlier full-path test portrait, a `0.10mm` epsilon with no margin and `rotate_180` enabled produced `1171` planned points from `5177` source points, kept the path inside `x=0.282..99.718mm` and `y=0..100mm`, and had an estimated feed-only time of about `80.8s`. In those tests, `0.15mm` was slightly faster and smoother than `0.08mm`, but `0.10mm` is a more conservative default for generated portraits until we have visual comparisons with a pen.
 
 ## Microstep notes
 
