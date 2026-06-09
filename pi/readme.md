@@ -3,13 +3,13 @@
 This Pi runs three small services:
 
 - `plotter`: receives planned vector paths and streams G-code to TinyG.
-- `camera`: captures a full webcam JPEG and sends it to the local-network processor.
+- `camera`: captures a full webcam JPEG and sends it to the configured processor.
 - `button`: watches the GPIO button and calls the plotter service.
 
 The Pi no longer runs local face detection, eye detection, blink detection, dlib,
-TFLite, or Coral code. The camera service sends the full `.jpg` to
-`vibecheck.local`, and that nearby machine is responsible for image
-analysis/cropping/vectorization.
+TFLite, or Coral code. The camera service sends the full `.jpg` to the
+configured `BSP_VIBECHECK_URL` or `BSP_PROCESS_URL`, and that remote service is
+responsible for image analysis/cropping/vectorization.
 
 ## OS
 
@@ -156,9 +156,9 @@ sudo systemctl restart camera plotter
 
 Available settings:
 
-- `BSP_VIBECHECK_URL`: base URL for the face/vector processing API, default `http://vibecheck.local:8787`
+- `BSP_VIBECHECK_URL`: base URL for the full-frame vector processing API, default `http://vibecheck.taildd340.ts.net:8787`; for RunPod use its full `https://...` base URL if provided
 - `BSP_PROCESS_URL`: optional full process endpoint override, default `$BSP_VIBECHECK_URL/api/process`
-- `BSP_PLOTTER_DRAW_URL`: local plotter draw endpoint used by the camera
+- `BSP_PLOTTER_CAPTURE_RESULT_URL`: local plotter endpoint used by the camera after processor response, default `http://localhost:8080/capture-result`
 - `BSP_CAMERA_SHUTTER_URL`: local camera shutter endpoint used by the plotter
 - `BSP_TINYG_PORT`: optional TinyG serial device override, for example `/dev/ttyUSB0`
 
@@ -188,6 +188,7 @@ Plotter:
 - `GET http://localhost:8080/stop`
 - `POST http://localhost:8080/draw`
 - `POST http://localhost:8080/draw-json`
+- `POST http://localhost:8080/capture-result`
 
 Camera:
 
@@ -195,7 +196,8 @@ Camera:
 
 Button:
 
-- short press calls `http://localhost:8080/button`; when the plotter is home this triggers a camera capture, and when drawing it stops the plotter
+- short press calls `http://localhost:8080/button`; when the plotter is home this triggers a camera capture and turns the button light off, when the capture result is ready the button light turns on, the next press draws that stored result, and a press while drawing resets to the beginning state
+- while the button light is off, button presses are ignored locally by the button service
 - long press homes the plotter and shuts down the Pi
 
 ## Processor Response Schema
@@ -218,8 +220,12 @@ or the full process API shape:
 {"vector": {"continuous_path": {"points": [[0, 0], [1, 1]]}}}
 ```
 
-The camera service forwards the `vector` object from the process response to the
-plotter as the `path` value.
+The camera service posts the `vector` object from the process response to
+`/capture-result`. The plotter stores it until the next valid button press.
+
+All planned paths are rotated 180 degrees at the plotter planning layer before
+G-code is generated, regardless of whether they arrive from the web interface,
+`/draw`, or `/draw-json`.
 
 ## Removed Legacy Setup
 

@@ -7,13 +7,14 @@ import threading
 import time
 import queue
 import time
+import uuid
 from enum import Enum
 
 import requests
 import flask
 from flask import Flask
 from waitress import serve
-from motion import DEFAULT_EPSILON_MM, plan_path
+from motion import DEFAULT_EPSILON_MM, DEFAULT_ROTATE_180, plan_path
 from serial.tools import list_ports
 
 home_position = (50, 65)
@@ -27,8 +28,9 @@ tinyg_motion_params = {
     'yvm': 3000,
 }
 reconnect_interval = 1
+post_draw_home_delay_seconds = 10
 
-State = Enum('State', 'HOME DRAWING POSTDRAW')
+State = Enum('State', 'HOME CAPTURING READY DRAWING POSTDRAW')
 
 import sys
 def log(*args):
@@ -83,6 +85,9 @@ class Plotter(threading.Thread):
         self.clear = threading.Event()
         self.state = State.HOME
         self.ready = True
+        self.pending_path = None
+        self.pending_capture = None
+        self.last_capture_timings = None
 
         if self.connect():
             self.initialize_position()
@@ -147,6 +152,8 @@ class Plotter(threading.Thread):
             pass
         self.ser = FakeSerial()
         self.state = State.HOME
+        self.pending_path = None
+        self.pending_capture = None
 
     def clear_queue(self):
         with self.queue.mutex:
@@ -226,6 +233,32 @@ class Plotter(threading.Thread):
         for command in commands:
             self.queue.put(f'{command}\n')
         self.state = State.DRAWING
+
+    def begin_capture(self):
+        request_id = str(uuid.uuid4())
+        self.pending_path = None
+        self.pending_capture = request_id
+        self.last_capture_timings = None
+        self.state = State.CAPTURING
+        return request_id
+
+    def finish_capture(self, request_id, path_payload, timings=None):
+        if self.state != State.CAPTURING:
+            raise RuntimeError(f'plotter is not waiting for capture result; current state is {self.state.name}')
+        if self.pending_capture and request_id and self.pending_capture != request_id:
+            raise RuntimeError('capture result request_id did not match active capture')
+        self.pending_path = path_payload
+        self.pending_capture = None
+        self.last_capture_timings = timings
+        self.state = State.READY
+
+    def reset_to_beginning(self):
+        log('plotter> reset to beginning')
+        self.stop()
+        self.pending_path = None
+        self.pending_capture = None
+        self.last_capture_timings = None
+        self.state = State.HOME
             
     def join(self):
         log('plotter> sending shutdown')
@@ -311,8 +344,8 @@ class Plotter(threading.Thread):
                             log(f'plotter> finished at (b)', read_queue_size)
                             read_queue_size = 0
                 if read_queue_size == 0 and self.state == State.DRAWING:
-                    log('plotter> finished drawing, waiting to go home')
-                    time.sleep(4)
+                    log(f'plotter> finished drawing, waiting {post_draw_home_delay_seconds}s to go home')
+                    time.sleep(post_draw_home_delay_seconds)
                     self.home()
             except serial.SerialTimeoutException:
                 log('plotter> timeout')
@@ -330,7 +363,7 @@ def queue_planned_draw(
     path_payload,
     raw=False,
     flip_y=True,
-    rotate_180=False,
+    rotate_180=DEFAULT_ROTATE_180,
     epsilon_mm=DEFAULT_EPSILON_MM,
     source='draw',
 ):
@@ -360,7 +393,7 @@ def draw_payload(body, source='draw'):
         body.get('path', body),
         raw=raw,
         flip_y=bool(body.get('flip_y', not raw)),
-        rotate_180=bool(body.get('rotate_180', False)),
+        rotate_180=DEFAULT_ROTATE_180,
         epsilon_mm=float(body.get('epsilon_mm', DEFAULT_EPSILON_MM)),
         source=source,
     )
@@ -370,6 +403,26 @@ def planned_response(planned):
         'state': plotter.state.name,
         'stats': planned['stats'],
     }, 200
+
+def count_points(path_payload):
+    if not isinstance(path_payload, dict):
+        try:
+            return len(path_payload)
+        except TypeError:
+            return None
+    if 'coordinates' in path_payload:
+        return len(path_payload['coordinates'])
+    if 'vector' in path_payload:
+        return count_points(path_payload['vector'])
+    if 'path' in path_payload:
+        return count_points(path_payload['path'])
+    try:
+        return len(path_payload['continuous_path']['points'])
+    except (KeyError, TypeError):
+        return None
+
+def button_light_on():
+    return plotter.state != State.CAPTURING
 
 @app.route('/')
 def index():
@@ -421,8 +474,6 @@ def draw_json():
             options['raw'] = form.get('raw') == 'true'
         if 'flip_y' in form:
             options['flip_y'] = form.get('flip_y') == 'true'
-        if 'rotate_180' in form:
-            options['rotate_180'] = form.get('rotate_180') == 'true'
         if 'epsilon_mm' in form:
             options['epsilon_mm'] = form.get('epsilon_mm')
         if options:
@@ -447,13 +498,31 @@ def stop():
 @app.route('/shutter')
 def shutter():
     log('shutter> pressed')
+    request_id = plotter.begin_capture()
     try:
-        response = requests.get(camera_url, timeout=5)
+        response = requests.get(camera_url, params={'request_id': request_id}, timeout=5)
         response.raise_for_status()
     except requests.RequestException as e:
         log('shutter> camera request failed', e)
+        plotter.reset_to_beginning()
         return {'error': str(e)}, 502
-    return '',200
+    return {'state': plotter.state.name, 'button_light': button_light_on(), 'request_id': request_id}, 202
+
+@app.route('/capture-result', methods=['POST'])
+def capture_result():
+    body = flask.request.get_json(silent=True) or {}
+    path_payload = body.get('path') or body.get('vector') or body.get('process_response')
+    request_id = body.get('request_id')
+    try:
+        if count_points(path_payload) is None:
+            raise ValueError('capture result did not contain path points')
+        plotter.finish_capture(request_id, path_payload, timings=body.get('timings'))
+    except (TypeError, ValueError, RuntimeError) as e:
+        log('capture-result> invalid result', e)
+        return {'error': str(e)}, 400
+    point_count = count_points(path_payload)
+    log('capture-result> ready', point_count, 'points')
+    return {'state': plotter.state.name, 'button_light': button_light_on(), 'point_count': point_count}, 200
 
 @app.route('/button')
 def button():
@@ -461,13 +530,27 @@ def button():
     if plotter.state == State.HOME:
         log('button> shutter()')
         return shutter()
+    elif plotter.state == State.CAPTURING:
+        log('button> ignored while capture is running')
+        return {'state': plotter.state.name, 'button_light': button_light_on(), 'ignored': True}, 200
+    elif plotter.state == State.READY:
+        log('button> draw pending capture')
+        try:
+            planned = draw_payload({'path': plotter.pending_path}, source='capture')
+            plotter.pending_path = None
+        except (KeyError, TypeError, ValueError, RuntimeError) as e:
+            log('button> pending capture invalid', e)
+            return {'error': str(e), 'state': plotter.state.name, 'button_light': button_light_on()}, 400
+        body, status = planned_response(planned)
+        body['button_light'] = button_light_on()
+        return body, status
     elif plotter.state == State.DRAWING:
-        log('button> stop()')
-        stop()
+        log('button> reset()')
+        plotter.reset_to_beginning()
     elif plotter.state == State.POSTDRAW:
         log('button> home()')
         home()
-    return '',200
+    return {'state': plotter.state.name, 'button_light': button_light_on()}, 200
 
 @app.route('/status')	
 def status():
@@ -475,6 +558,10 @@ def status():
         'state': plotter.state.name,
         'connected': plotter.connected,
         'port': plotter.port,
+        'button_light': button_light_on(),
+        'pending_capture': plotter.pending_capture,
+        'has_pending_path': plotter.pending_path is not None,
+        'last_capture_timings': plotter.last_capture_timings,
     }
 
 serve(app, listen='*:8080')

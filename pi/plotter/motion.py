@@ -7,6 +7,7 @@ LIMIT_POSITION = np.array([100.0, 100.0])
 DEFAULT_MARGIN_MM = 0.0
 DEFAULT_EPSILON_MM = 0.10
 DEFAULT_MIN_SEGMENT_MM = 0.04
+DEFAULT_ROTATE_180 = True
 APPROACH_FEED_MM_MIN = 1200
 
 
@@ -203,7 +204,7 @@ def plan_path(
     path_payload,
     raw=False,
     flip_y=True,
-    rotate_180=False,
+    rotate_180=DEFAULT_ROTATE_180,
     margin_mm=DEFAULT_MARGIN_MM,
     epsilon_mm=DEFAULT_EPSILON_MM,
     min_segment_mm=DEFAULT_MIN_SEGMENT_MM,

@@ -18,6 +18,11 @@
       margin: 0.5em 0;
     }
 
+    canvas {
+      border: 1px solid #000;
+      display: block;
+    }
+
     #upload-status {
       font-family: monospace;
       white-space: pre-wrap;
@@ -56,15 +61,15 @@
     }
 
     function draw() {
-      background(220);
+      background(255);
+      stroke(0);
+      strokeWeight(1);
       noFill();
-      beginShape();
-      path.forEach((e) => vertex(...e));
-      endShape();
-      const r = 1;
-      path.forEach((e) => {
-        square(e[0] - r, e[1] - r, 2 * r);
-      });
+      if (path.length > 0) {
+        beginShape();
+        path.forEach((e) => vertex(...e));
+        endShape();
+      }
     }
 
     function mousePressedInner() {
@@ -97,6 +102,57 @@
         document.getElementById("circle-n").value,
         document.getElementById("circle-r").value
       );
+    }
+
+    function pointsFromJson(payload) {
+      while (payload && typeof payload === "object" && !Array.isArray(payload)) {
+        if (payload.vector) {
+          payload = payload.vector;
+        } else if (payload.continuous_path) {
+          payload = payload.continuous_path.points;
+        } else if (payload.coordinates) {
+          payload = payload.coordinates;
+        } else if (payload.path) {
+          payload = payload.path;
+        } else {
+          break;
+        }
+      }
+      if (!Array.isArray(payload)) {
+        throw new Error("JSON does not contain path points");
+      }
+      const points = payload.map((point) => {
+        if (!Array.isArray(point) || point.length < 2) {
+          throw new Error("Path points must be [x, y] pairs");
+        }
+        return [Number(point[0]), Number(point[1])];
+      });
+      if (points.length < 2 || points.some(([x, y]) => !Number.isFinite(x) || !Number.isFinite(y))) {
+        throw new Error("Path must contain at least two finite points");
+      }
+      return points;
+    }
+
+    function previewJson(payload) {
+      const points = pointsFromJson(payload);
+      const xs = points.map(([x]) => x);
+      const ys = points.map(([, y]) => y);
+      const minX = Math.min(...xs);
+      const maxX = Math.max(...xs);
+      const minY = Math.min(...ys);
+      const maxY = Math.max(...ys);
+      const spanX = Math.max(maxX - minX, 1e-9);
+      const spanY = Math.max(maxY - minY, 1e-9);
+      const padding = 12;
+      const scale = Math.min((dim - 2 * padding) / spanX, (dim - 2 * padding) / spanY);
+      const usedX = spanX * scale;
+      const usedY = spanY * scale;
+      const offsetX = padding + (dim - 2 * padding - usedX) / 2;
+      const offsetY = padding + (dim - 2 * padding - usedY) / 2;
+      path = points.map(([x, y]) => [
+        offsetX + (x - minX) * scale,
+        offsetY + (y - minY) * scale
+      ]);
     }
 
     function send() {
@@ -138,6 +194,7 @@
       file.text()
         .then((text) => JSON.parse(text))
         .then((json) => {
+          previewJson(json);
           status.innerText = "Uploading...";
           return fetch("/draw", {
             method: "POST",
@@ -167,6 +224,28 @@
           status.innerText = `Upload failed: ${error.message}`;
         });
     }
+
+    function previewSelectedJson() {
+      const input = document.getElementById("json-file");
+      const status = document.getElementById("upload-status");
+      const file = input.files[0];
+      if (!file) {
+        path = [];
+        status.innerText = "";
+        return;
+      }
+      status.innerText = "Reading preview...";
+      file.text()
+        .then((text) => JSON.parse(text))
+        .then((json) => {
+          previewJson(json);
+          status.innerText = "Preview ready.";
+        })
+        .catch((error) => {
+          path = [];
+          status.innerText = `Preview failed: ${error.message}`;
+        });
+    }
   </script>
 </head>
 
@@ -187,7 +266,7 @@
   <button onclick="fetch('/stop')">Stop</button>
   <button onclick="fetch('/button')">Button</button>
   <div class="row">
-    <input id="json-file" type="file" accept="application/json,.json" />
+    <input id="json-file" type="file" accept="application/json,.json" onchange="previewSelectedJson()" />
     <button onclick="uploadJson()">Upload JSON and Plot</button>
     <div id="upload-status"></div>
   </div>
