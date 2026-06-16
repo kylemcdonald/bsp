@@ -160,6 +160,9 @@ Available settings:
 - `BSP_PROCESS_URL`: optional full process endpoint override, default `$BSP_VIBECHECK_URL/api/process`
 - `BSP_PLOTTER_CAPTURE_RESULT_URL`: local plotter endpoint used by the camera after processor response, default `http://localhost:8080/capture-result`
 - `BSP_CAMERA_SHUTTER_URL`: local camera shutter endpoint used by the plotter
+- `BSP_CAMERA_PREVIEW_URL`: local camera preview endpoint used by the plotter web UI, default `http://localhost:8081/preview.jpg`
+- `BSP_CAMERA_SETTINGS_URL`: local camera settings endpoint used by the plotter web UI, default `http://localhost:8081/settings`
+- `BSP_CAMERA_DEVICE`: V4L2 camera device used for camera controls, default `/dev/video0`
 - `BSP_TINYG_PORT`: optional TinyG serial device override, for example `/dev/ttyUSB0`
 
 ## Hardware Checks
@@ -188,11 +191,15 @@ Plotter:
 - `GET http://localhost:8080/stop`
 - `POST http://localhost:8080/draw`
 - `POST http://localhost:8080/draw-json`
+- `GET http://localhost:8080/camera-preview.jpg`
 - `POST http://localhost:8080/capture-result`
 
 Camera:
 
 - `GET http://localhost:8081/shutter`
+- `GET http://localhost:8081/preview.jpg`
+- `GET http://localhost:8081/settings`
+- `POST http://localhost:8081/settings`
 
 Button:
 

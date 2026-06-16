@@ -1,108 +1,351 @@
+<!doctype html>
 <html>
 
 <head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" href="data:;base64,=" />
-  <title>Control</title>
+  <title>BSP Control</title>
   <style>
+    * {
+      box-sizing: border-box;
+    }
+
     body {
-      font-family: sans-serif;
+      margin: 0;
+      color: #111;
+      background: #f7f7f4;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 16px;
+      line-height: 1.4;
     }
 
-    input,
-    button {
-      margin: 0.5em 0;
-      font-size: 1em;
+    main {
+      width: min(100%, 960px);
+      margin: 0 auto;
+      padding: 16px;
     }
 
-    .row {
-      margin: 0.5em 0;
+    h1,
+    h2 {
+      margin: 0 0 12px;
+      line-height: 1.1;
     }
 
-    canvas {
-      border: 1px solid #000;
+    h1 {
+      font-size: 28px;
+    }
+
+    h2 {
+      font-size: 18px;
+    }
+
+    section {
+      margin: 0 0 18px;
+      padding: 14px 0;
+      border-top: 1px solid #d8d8d0;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 8px;
+    }
+
+    button,
+    input::file-selector-button {
+      min-height: 44px;
+      border: 1px solid #222;
+      border-radius: 6px;
+      background: #fff;
+      color: #111;
+      font: inherit;
+      font-weight: 650;
+      cursor: pointer;
+      padding: 10px 12px;
+    }
+
+    button:active,
+    input::file-selector-button:active {
+      transform: translateY(1px);
+    }
+
+    button.primary {
+      background: #111;
+      color: #fff;
+    }
+
+    button.danger {
+      border-color: #9b1c1c;
+      color: #9b1c1c;
+    }
+
+	    input[type="file"] {
+	      width: 100%;
+	      min-height: 44px;
+	      font: inherit;
+	      margin: 6px 0 12px;
+	    }
+
+	    .control-panel {
+	      display: grid;
+	      gap: 12px;
+	      max-width: 520px;
+	    }
+
+	    .toggle-row,
+	    .slider-row {
+	      display: grid;
+	      grid-template-columns: minmax(150px, 1fr) minmax(180px, 2fr) 56px;
+	      gap: 10px;
+	      align-items: center;
+	    }
+
+	    .toggle-row {
+	      grid-template-columns: minmax(150px, 1fr) auto 56px;
+	      justify-content: start;
+	    }
+
+	    label {
+	      font-weight: 650;
+	    }
+
+	    input[type="checkbox"] {
+	      width: 24px;
+	      height: 24px;
+	    }
+
+	    input[type="range"] {
+	      width: 100%;
+	    }
+
+	    .value-text {
+	      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	      font-size: 13px;
+	      text-align: right;
+	    }
+
+    .media-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      align-items: start;
+    }
+
+    .media-grid.no-preview {
+      grid-template-columns: 1fr;
+    }
+
+    .preview-frame {
+      width: 100%;
+      border: 1px solid #222;
+      border-radius: 6px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .preview-frame.hidden {
+      display: none;
+    }
+
+    #camera-preview {
+      width: 100%;
+      height: auto;
       display: block;
     }
 
-    #upload-status {
-      font-family: monospace;
-      white-space: pre-wrap;
+    #path-preview {
+      width: 100%;
+      max-width: 420px;
+      aspect-ratio: 1;
+      display: block;
     }
+
+    .status-text {
+      min-height: 24px;
+      margin-top: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    #status {
+      display: block;
+      padding: 10px;
+      border: 1px solid #d8d8d0;
+      border-radius: 6px;
+      background: #fff;
+    }
+
+    @media (max-width: 700px) {
+      main {
+        padding: 12px;
+      }
+
+      h1 {
+        font-size: 24px;
+      }
+
+	      .media-grid {
+	        grid-template-columns: 1fr;
+	      }
+
+	      .toggle-row,
+	      .slider-row {
+	        grid-template-columns: 1fr;
+	      }
+
+	      .value-text {
+	        text-align: left;
+	      }
+	    }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/p5@1.2.0/lib/p5.js"></script>
   <script>
     const dim = 400;
-    let last;
-    let path = [];
+    let previewPath = [];
+
+    function setText(id, text) {
+      document.getElementById(id).innerText = text;
+    }
+
+    async function getJson(url) {
+      const response = await fetch(url);
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.error || response.statusText);
+      }
+      return body;
+    }
+
+    async function fetchCommand(url) {
+      const response = await fetch(url, {
+        cache: "no-store",
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.error || response.statusText);
+      }
+      return body;
+    }
 
     function checkStatus() {
-      fetch("/status")
-        .then(e => e.json())
-        .then(e => {
-          select('#status').elt.innerText = JSON.stringify(e);
+      getJson("/status")
+        .then((status) => {
+          setText("status", JSON.stringify(status, null, 2));
+        })
+        .catch((error) => {
+          setText("status", `Status failed: ${error.message}`);
         });
     }
 
-    function setup() {
-      const c = createCanvas(dim, dim);
-      c.mousePressed(mousePressedInner);
-      c.mouseReleased(mouseReleasedInner);
-      c.mouseMoved(mouseMovedInner);
-      c.parent("container");
-      background(220);
-      setInterval(checkStatus, 1000);
-
-      // for(let i = 0 ; i < 100; i++) {
-      //   let theta = Math.random() * Math.PI * 2;
-      //   let r = 180; //Math.random() * 200;
-      //   let x = 200 + Math.cos(theta) * r;
-      //   let y = 200 + Math.sin(theta) * r;
-      //   path.push([x,y]);
-      // }
+    function runMachineCommand(label, url) {
+      setText("command-status", `${label} sent...`);
+      fetchCommand(url)
+        .then(() => {
+          setText("command-status", `${label} accepted.`);
+          checkStatus();
+        })
+        .catch((error) => {
+          setText("command-status", `${label} failed: ${error.message}`);
+          checkStatus();
+        });
     }
 
-    function draw() {
-      background(255);
-      stroke(0);
-      strokeWeight(1);
-      noFill();
-      if (path.length > 0) {
-        beginShape();
-        path.forEach((e) => vertex(...e));
-        endShape();
-      }
-    }
+	    function takePreviewPhoto() {
+	      const img = document.getElementById("camera-preview");
+	      const frame = document.getElementById("camera-preview-frame");
+	      const status = document.getElementById("preview-status");
+	      const nextImg = new Image();
+	      status.innerText = "Capturing preview...";
+	      nextImg.onload = () => {
+	        img.src = nextImg.src;
+	        frame.classList.remove("hidden");
+	        status.innerText = "Preview ready.";
+	      };
+	      nextImg.onerror = () => {
+	        status.innerText = "Preview failed.";
+	      };
+	      nextImg.src = `/camera-preview.jpg?t=${Date.now()}`;
+	    }
 
-    function mousePressedInner() {
-      path = [];
-    }
+	    function updateCameraSettingLabels() {
+	      const exposure = document.getElementById("camera-exposure");
+	      const gain = document.getElementById("camera-gain");
+	      const autoExposure = document.getElementById("camera-auto-exposure");
+	      document.getElementById("camera-exposure-value").innerText = exposure.value;
+	      document.getElementById("camera-gain-value").innerText = gain.value;
+	      exposure.disabled = autoExposure.checked;
+	    }
 
-    function mouseMovedInner() {
-      if (!mouseIsPressed) {
-        return;
-      }
-      path.push([mouseX, mouseY]);
-    }
+	    function applyCameraSettingsToForm(settings) {
+	      document.getElementById("camera-auto-exposure").checked = Boolean(settings.auto_exposure_enabled);
+	      if (Number.isFinite(settings.exposure_time_absolute)) {
+	        const exposure = document.getElementById("camera-exposure");
+	        exposure.value = Math.min(Number(exposure.max), Math.max(Number(exposure.min), settings.exposure_time_absolute));
+	      }
+	      if (Number.isFinite(settings.gain)) {
+	        const gain = document.getElementById("camera-gain");
+	        gain.value = Math.min(Number(gain.max), Math.max(Number(gain.min), settings.gain));
+	      }
+	      updateCameraSettingLabels();
+	    }
 
-    function mouseReleasedInner() {
-      path.push([mouseX, mouseY]);
-    }
+	    function loadCameraSettings() {
+	      setText("camera-settings-status", "Loading...");
+	      getJson("/camera-settings")
+	        .then((settings) => {
+	          applyCameraSettingsToForm(settings);
+	          setText("camera-settings-status", "Loaded.");
+	        })
+	        .catch((error) => {
+	          setText("camera-settings-status", `Load failed: ${error.message}`);
+	        });
+	    }
 
-    function createCircle(n, r) {
-      path = [];
-      for (let t = 0; t < n; t++) {
-        const theta = map(t, 0, n - 1, 0, Math.PI * 2);
-        const x = r * Math.cos(theta) + dim / 2;
-        const y = r * Math.sin(theta) + dim / 2;
-        path.push([x, y]);
-      }
-    }
+	    function saveCameraSettings() {
+	      const autoExposureEnabled = document.getElementById("camera-auto-exposure").checked;
+	      const payload = {
+	        auto_exposure_enabled: autoExposureEnabled,
+	        gain: Number(document.getElementById("camera-gain").value),
+	      };
+	      if (!autoExposureEnabled) {
+	        payload.exposure_time_absolute = Number(document.getElementById("camera-exposure").value);
+	      }
+	      setText("camera-settings-status", "Saving...");
+	      return fetch("/camera-settings", {
+	        method: "POST",
+	        headers: {
+	          "Content-Type": "application/json",
+	        },
+	        body: JSON.stringify(payload),
+	      })
+	        .then(async (response) => {
+	          const body = await response.json().catch(() => ({}));
+	          if (!response.ok) {
+	            throw new Error(body.error || response.statusText);
+	          }
+	          return body;
+	        })
+	        .then((settings) => {
+	          applyCameraSettingsToForm(settings);
+	          setText("camera-settings-status", "Saved.");
+	          return settings;
+	        })
+	        .catch((error) => {
+	          setText("camera-settings-status", `Save failed: ${error.message}`);
+	          throw error;
+	        });
+	    }
 
-    function circleClick() {
-      createCircle(
-        document.getElementById("circle-n").value,
-        document.getElementById("circle-r").value
-      );
-    }
+	    function previewWithCurrentCameraSettings() {
+	      setText("preview-status", "");
+	      saveCameraSettings()
+	        .then(() => {
+	          takePreviewPhoto();
+	        })
+	        .catch(() => {});
+	    }
 
     function pointsFromJson(payload) {
       while (payload && typeof payload === "object" && !Array.isArray(payload)) {
@@ -133,6 +376,30 @@
       return points;
     }
 
+    function drawPathPreview() {
+      const canvas = document.getElementById("path-preview");
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, dim, dim);
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, dim, dim);
+      ctx.strokeStyle = "#111";
+      ctx.lineWidth = 1.5;
+
+      if (previewPath.length < 2) {
+        return;
+      }
+
+      ctx.beginPath();
+      previewPath.forEach(([x, y], index) => {
+        if (index === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+      ctx.stroke();
+    }
+
     function previewJson(payload) {
       const points = pointsFromJson(payload);
       const xs = points.map(([x]) => x);
@@ -149,61 +416,59 @@
       const usedY = spanY * scale;
       const offsetX = padding + (dim - 2 * padding - usedX) / 2;
       const offsetY = padding + (dim - 2 * padding - usedY) / 2;
-      path = points.map(([x, y]) => [
+      previewPath = points.map(([x, y]) => [
         offsetX + (x - minX) * scale,
         offsetY + (y - minY) * scale
       ]);
+      document.getElementById("path-preview-frame").classList.remove("hidden");
+      drawPathPreview();
     }
 
-    function send() {
-      const limit = 100;
-      const scale = limit / dim;
-      const scaledPath = path.map(([x, y]) => [
-        limit - (x * scale),
-        (y * scale)
-      ]);
-      fetch("/draw", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          path: {
-            continuous_path: {
-              points: scaledPath
-            }
-          },
-          raw: true
-        }),
-      });
+    function selectedJsonFile() {
+      return document.getElementById("json-file").files[0];
     }
 
-    function sendWithDelay() {
-      setTimeout(send, 2000);
-    }
-
-    function uploadJson() {
-      const input = document.getElementById("json-file");
-      const status = document.getElementById("upload-status");
-      const file = input.files[0];
+    function previewSelectedJson() {
+      const file = selectedJsonFile();
       if (!file) {
-        status.innerText = "Choose a JSON file first.";
+        previewPath = [];
+        document.getElementById("path-preview-frame").classList.add("hidden");
+        document.getElementById("json-plot-grid").classList.add("no-preview");
+        setText("upload-status", "");
         return;
       }
-      status.innerText = "Reading...";
+      setText("upload-status", "Reading preview...");
       file.text()
         .then((text) => JSON.parse(text))
         .then((json) => {
           previewJson(json);
-          status.innerText = "Uploading...";
-          return fetch("/draw", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(json),
-          });
+          document.getElementById("json-plot-grid").classList.remove("no-preview");
+          setText("upload-status", "Preview ready.");
         })
+        .catch((error) => {
+          previewPath = [];
+          document.getElementById("path-preview-frame").classList.add("hidden");
+          document.getElementById("json-plot-grid").classList.add("no-preview");
+          setText("upload-status", `Preview failed: ${error.message}`);
+        });
+    }
+
+    function uploadJson() {
+      const file = selectedJsonFile();
+      if (!file) {
+        setText("upload-status", "Choose a JSON file first.");
+        return;
+      }
+      setText("upload-status", "Uploading...");
+      file.text()
+        .then((text) => JSON.parse(text))
+        .then((json) => fetch("/draw", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(json),
+        }))
         .then(async (response) => {
           const body = await response.json().catch(() => ({}));
           if (!response.ok) {
@@ -214,66 +479,97 @@
         .then((body) => {
           const planned = body.stats && body.stats.planned;
           if (planned) {
-            status.innerText = `Queued ${planned.point_count} points, ${planned.path_length_mm.toFixed(1)}mm`;
+            setText("upload-status", `Queued ${planned.point_count} points, ${planned.path_length_mm.toFixed(1)}mm`);
           } else {
-            status.innerText = "Queued";
+            setText("upload-status", "Queued.");
           }
           checkStatus();
         })
         .catch((error) => {
-          status.innerText = `Upload failed: ${error.message}`;
+          setText("upload-status", `Upload failed: ${error.message}`);
         });
     }
 
-    function previewSelectedJson() {
-      const input = document.getElementById("json-file");
-      const status = document.getElementById("upload-status");
-      const file = input.files[0];
-      if (!file) {
-        path = [];
-        status.innerText = "";
-        return;
-      }
-      status.innerText = "Reading preview...";
-      file.text()
-        .then((text) => JSON.parse(text))
-        .then((json) => {
-          previewJson(json);
-          status.innerText = "Preview ready.";
-        })
-        .catch((error) => {
-          path = [];
-          status.innerText = `Preview failed: ${error.message}`;
-        });
-    }
+	    window.addEventListener("load", () => {
+	      checkStatus();
+	      loadCameraSettings();
+	      setInterval(checkStatus, 1000);
+	    });
   </script>
 </head>
 
 <body>
-  <div>
-    <button onclick="fetch('/go?x=0&y=0')">Min</button>
-    <button onclick="fetch('/home')">Home</button>
-    <button onclick="fetch('/go?x=100&y=100')">Max</button>
-  </div>
-  <div>
-    <input type="range" min="4" max="512" value="256" id="circle-n" oninput="circleClick()" />
-    <input type="range" min="10" max="200" value="150" id="circle-r" oninput="circleClick()" />
-    Circle
-  </div>
-  <div id="container"></div>
-  <button onclick="send()">Send</button>
-  <button onclick="sendWithDelay()">Send with delay</button>
-  <button onclick="fetch('/stop')">Stop</button>
-  <button onclick="fetch('/button')">Button</button>
-  <div class="row">
-    <input id="json-file" type="file" accept="application/json,.json" onchange="previewSelectedJson()" />
-    <button onclick="uploadJson()">Upload JSON and Plot</button>
-    <div id="upload-status"></div>
-  </div>
-  <div style="font-family: monospace">
-    Status:
-    <span id="status"></span>
-  </div>
+  <main>
+    <h1>BSP Control</h1>
+
+    <section>
+      <h2>Machine</h2>
+      <div class="actions">
+        <button onclick="runMachineCommand('Min', '/go?x=0&y=0')">Min</button>
+        <button onclick="runMachineCommand('Home', '/home')">Home</button>
+        <button onclick="runMachineCommand('Max', '/go?x=100&y=100')">Max</button>
+        <button class="danger" onclick="runMachineCommand('Stop', '/stop')">Stop</button>
+        <button class="primary" onclick="runMachineCommand('Button', '/button')">Button</button>
+      </div>
+      <div class="status-text" id="command-status"></div>
+    </section>
+
+	    <section>
+	      <h2>Camera Preview</h2>
+	      <div class="status-text" id="preview-status"></div>
+	      <div class="preview-frame hidden" id="camera-preview-frame">
+	        <img id="camera-preview" alt="Camera preview" />
+	      </div>
+	    </section>
+
+	    <section>
+	      <h2>Camera Settings</h2>
+	      <div class="control-panel">
+	        <div class="toggle-row">
+	          <label for="camera-auto-exposure">Auto Exposure</label>
+	          <input id="camera-auto-exposure" type="checkbox" onchange="updateCameraSettingLabels()" />
+	          <span class="value-text"></span>
+	        </div>
+	        <div class="slider-row">
+	          <label for="camera-exposure">Manual Exposure</label>
+	          <input id="camera-exposure" type="range" min="3" max="500" step="1" value="100" oninput="updateCameraSettingLabels()" />
+	          <span class="value-text" id="camera-exposure-value">100</span>
+	        </div>
+	        <div class="slider-row">
+	          <label for="camera-gain">Gain</label>
+	          <input id="camera-gain" type="range" min="0" max="255" step="1" value="0" oninput="updateCameraSettingLabels()" />
+	          <span class="value-text" id="camera-gain-value">0</span>
+	        </div>
+	        <div class="actions">
+	          <button onclick="loadCameraSettings()">Load</button>
+	          <button class="primary" onclick="saveCameraSettings()">Apply</button>
+	          <button onclick="previewWithCurrentCameraSettings()">Preview</button>
+	        </div>
+	      </div>
+	      <div class="status-text" id="camera-settings-status"></div>
+	    </section>
+
+	    <section>
+	      <h2>JSON Plot</h2>
+      <div class="media-grid no-preview" id="json-plot-grid">
+        <div>
+          <input id="json-file" type="file" accept="application/json,.json" onchange="previewSelectedJson()" />
+          <div class="actions">
+            <button class="primary" onclick="uploadJson()">Upload JSON and Plot</button>
+          </div>
+          <div class="status-text" id="upload-status"></div>
+        </div>
+        <div class="preview-frame hidden" id="path-preview-frame">
+          <canvas id="path-preview" width="400" height="400"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Status</h2>
+      <code id="status" class="status-text"></code>
+    </section>
+  </main>
 </body>
 
 </html>

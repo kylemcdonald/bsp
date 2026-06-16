@@ -5,10 +5,11 @@ import threading
 import datetime
 import os
 import queue
+import subprocess
 import uuid
 
 import requests
-from flask import Flask, request
+from flask import Flask, Response, request
 from waitress import serve
 
 from flushed import log
@@ -17,11 +18,89 @@ from wait_for_format import wait_for_format
 api_base_url = (os.environ.get('BSP_VIBECHECK_URL') or 'http://vibecheck.taildd340.ts.net:8787').rstrip('/')
 process_url = os.environ.get('BSP_PROCESS_URL') or f'{api_base_url}/api/process'
 plotter_result_url = os.environ.get('BSP_PLOTTER_CAPTURE_RESULT_URL', 'http://localhost:8080/capture-result')
-jpeg_quality = 90
+jpeg_quality = 50
 request_timeout = 120
+camera_device = os.environ.get('BSP_CAMERA_DEVICE', '/dev/video0')
 
 log('using process endpoint', process_url)
 log('using plotter capture result endpoint', plotter_result_url)
+
+camera_control_specs = {
+    'auto_exposure': {'min': 1, 'max': 3},
+    'exposure_time_absolute': {'min': 3, 'max': 500},
+    'gain': {'min': 0, 'max': 255},
+}
+
+def parse_bool(value, name):
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f'{name} must be true or false')
+
+def parse_int(value, name, min_value, max_value):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f'{name} must be an integer')
+    if parsed < min_value or parsed > max_value:
+        raise ValueError(f'{name} must be between {min_value} and {max_value}')
+    return parsed
+
+def run_v4l2_ctl(args):
+    command = ['v4l2-ctl', f'--device={camera_device}', *args]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip() or 'v4l2-ctl failed'
+        raise RuntimeError(message)
+    return result.stdout
+
+def get_camera_settings():
+    names = ','.join(camera_control_specs.keys())
+    output = run_v4l2_ctl([f'--get-ctrl={names}'])
+    settings = {}
+    for line in output.splitlines():
+        if ':' not in line:
+            continue
+        name, value = line.split(':', 1)
+        name = name.strip()
+        if name not in camera_control_specs:
+            continue
+        settings[name] = int(value.strip().split()[0])
+    settings['exposure_mode'] = 'auto' if settings.get('auto_exposure') == 3 else 'manual'
+    settings['auto_exposure_enabled'] = settings.get('auto_exposure') == 3
+    settings['limits'] = {
+        name: {
+            'min': spec['min'],
+            'max': spec['max'],
+        }
+        for name, spec in camera_control_specs.items()
+    }
+    return settings
+
+def set_camera_settings(payload):
+    if not isinstance(payload, dict):
+        raise ValueError('settings payload must be a JSON object')
+
+    controls = []
+    if 'auto_exposure_enabled' in payload:
+        enabled = parse_bool(payload['auto_exposure_enabled'], 'auto_exposure_enabled')
+        controls.append(f'auto_exposure={3 if enabled else 1}')
+    elif 'exposure_mode' in payload:
+        mode = payload['exposure_mode']
+        if mode not in ('auto', 'manual'):
+            raise ValueError('exposure_mode must be auto or manual')
+        controls.append(f'auto_exposure={3 if mode == "auto" else 1}')
+
+    for name in ('exposure_time_absolute', 'gain'):
+        if name not in payload:
+            continue
+        spec = camera_control_specs[name]
+        value = parse_int(payload[name], name, spec['min'], spec['max'])
+        controls.append(f'{name}={value}')
+
+    if controls:
+        run_v4l2_ctl([f'--set-ctrl={",".join(controls)}'])
+
+    return get_camera_settings()
 
 def count_points(path_payload):
     if not isinstance(path_payload, dict):
@@ -66,6 +145,7 @@ class Camera(threading.Thread):
         log('camera> camera is available')
 
         self.cap = cap
+        self.cap_lock = threading.Lock()
         self.shutdown = threading.Event()
         self.shutter = queue.Queue()
         self.start()
@@ -83,7 +163,8 @@ class Camera(threading.Thread):
         }
 
         log('camera> capture')
-        ret, img = self.cap.read()
+        with self.cap_lock:
+            ret, img = self.cap.read()
         timings['photo_received_at'] = time.perf_counter()
         if not ret:
             log('camera> capture failed')
@@ -142,10 +223,22 @@ class Camera(threading.Thread):
         except ValueError as e:
             log('camera> invalid process response', e)
 
+    def preview_jpeg(self):
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
+        with self.cap_lock:
+            ret, img = self.cap.read()
+        if not ret:
+            raise RuntimeError('camera preview capture failed')
+        ok, encimg = cv2.imencode('.jpg', img, encode_param)
+        if not ok:
+            raise RuntimeError('camera preview jpg encode failed')
+        return encimg.tobytes()
+
     def run(self):
         while not self.shutdown.is_set():
             # run through the buffer to stay up to date
-            ret = self.cap.grab()
+            with self.cap_lock:
+                ret = self.cap.grab()
 
             # watch for button presses
             try:
@@ -175,6 +268,28 @@ def shutter():
         'trigger_received_at': time.perf_counter(),
     })
     return {'request_id': request_id}, 202
+
+@app.route('/preview.jpg')
+def preview():
+    try:
+        data = camera.preview_jpeg()
+    except RuntimeError as e:
+        log('camera> preview failed', e)
+        return {'error': str(e)}, 503
+    return Response(data, mimetype='image/jpeg')
+
+@app.route('/settings', methods=['GET', 'POST'])
+def settings():
+    try:
+        if request.method == 'POST':
+            return set_camera_settings(request.get_json(silent=True) or {})
+        return get_camera_settings()
+    except ValueError as e:
+        log('camera> invalid settings', e)
+        return {'error': str(e)}, 400
+    except RuntimeError as e:
+        log('camera> settings failed', e)
+        return {'error': str(e)}, 502
 
 serve(app, listen='*:8081')
 camera.join()

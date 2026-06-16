@@ -19,8 +19,11 @@ shutdown_requested = False
 button_light_enabled = True
 plotter_state = None
 last_status_poll = 0
+last_flash_toggle = 0
+flash_on = False
 button_url = 'http://localhost:8080/button'
 status_url = 'http://localhost:8080/status'
+flash_interval = 0.25
 
 led = LED(led_pin)
 led.on()
@@ -48,6 +51,8 @@ def apply_status(payload):
     button_light_enabled = bool(payload.get('button_light', True))
     if shutdown_requested:
         return
+    if plotter_state == 'CAPTURING':
+        return
     if button_light_enabled:
         led.on()
     else:
@@ -60,6 +65,19 @@ def poll_status(now):
     last_status_poll = now
     apply_status(get_json(status_url))
 
+def update_flash(now):
+    global last_flash_toggle, flash_on
+    if shutdown_requested or plotter_state != 'CAPTURING':
+        return
+    if now - last_flash_toggle < flash_interval:
+        return
+    last_flash_toggle = now
+    flash_on = not flash_on
+    if flash_on:
+        led.on()
+    else:
+        led.off()
+
 def button_hold(now, seconds):
     global shutdown_requested
     if seconds > 3 and not shutdown_requested:
@@ -71,6 +89,7 @@ def button_hold(now, seconds):
         subprocess.call(['sudo', '/usr/sbin/shutdown', '-h', 'now'], shell=False)
     
 def button_release(now, seconds):
+    global last_flash_toggle, flash_on
     if shutdown_requested:
         return
     if not button_light_enabled:
@@ -78,8 +97,10 @@ def button_release(now, seconds):
         return
     print('button release')
     if plotter_state == 'HOME':
-        led.off()
         apply_status({'button_light': False, 'state': 'CAPTURING'})
+        last_flash_toggle = time.monotonic()
+        flash_on = True
+        led.on()
     payload = get_json(button_url)
     if payload is None:
         apply_status({'button_light': True, 'state': plotter_state})
@@ -90,6 +111,7 @@ while True:
     cur_active = button.is_active
     current_time = time.monotonic()
     poll_status(current_time)
+    update_flash(current_time)
     now = datetime.datetime.now()
     if cur_active and not last_active:
         last_press = now

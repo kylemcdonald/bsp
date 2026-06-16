@@ -8,6 +8,7 @@ import time
 import queue
 import time
 import uuid
+from collections import deque
 from enum import Enum
 
 import requests
@@ -20,6 +21,8 @@ from serial.tools import list_ports
 home_position = (50, 65)
 limit_position = (100, 100)
 camera_url = os.environ.get('BSP_CAMERA_SHUTTER_URL', 'http://localhost:8081/shutter')
+camera_preview_url = os.environ.get('BSP_CAMERA_PREVIEW_URL', 'http://localhost:8081/preview.jpg')
+camera_settings_url = os.environ.get('BSP_CAMERA_SETTINGS_URL', 'http://localhost:8081/settings')
 tinyg_port = os.environ.get('BSP_TINYG_PORT')
 tinyg_motion_params = {
     'xjm': 2000,
@@ -30,7 +33,7 @@ tinyg_motion_params = {
 reconnect_interval = 1
 post_draw_home_delay_seconds = 10
 
-State = Enum('State', 'HOME CAPTURING READY DRAWING POSTDRAW')
+State = Enum('State', 'HOME POSITIONED CAPTURING READY DRAWING POSTDRAW')
 
 import sys
 def log(*args):
@@ -98,8 +101,8 @@ class Plotter(threading.Thread):
         # hit limits and go home on start or reconnect
         self.clear_queue()
         self.define_position(*home_position)
-        self.go(0, 0)
-        self.go(*limit_position)
+        self.go(0, 0, state=State.POSITIONED)
+        self.go(*limit_position, state=State.POSITIONED)
         self.home()
 
     def connect(self):
@@ -211,21 +214,31 @@ class Plotter(threading.Thread):
             log('plotter> already home')
             return
         log('plotter> home')
-        self.go(*home_position)
+        self.go(*home_position, state=State.HOME)
+        self.state = State.HOME
+
+    def force_home(self):
+        log('plotter> force home')
+        self.pending_path = None
+        self.pending_capture = None
+        self.last_capture_timings = None
+        self.go(*home_position, state=State.HOME)
         self.state = State.HOME
         
     def stop(self):
         log('plotter> stop')
         self.clear.set()
 
-    def go(self, x, y):
+    def go(self, x, y, state=State.POSITIONED):
         if not self.connected:
             log('plotter> ignoring go while disconnected')
             return
         x = clamp(x, 'x', 0, limit_position[0])
         y = clamp(y, 'y', 0, limit_position[1])
-        self.queue.put(f'g0x{x:.4f}y{y:.4f}\n')
-        self.state = State.DRAWING
+        log(f'plotter> go {x:.4f} {y:.4f}')
+        self.queue.put(('~', 0, None))
+        self.queue.put((f'g0x{x:.4f}y{y:.4f}\n', 1, 'go'))
+        self.state = state
 
     def draw(self, commands):
         if not self.connected:
@@ -272,6 +285,7 @@ class Plotter(threading.Thread):
         print('plotter> run')
         blast_size = 4
         read_queue_size = 0
+        response_labels = deque()
         queue_previously_empty = True
         next_reconnect = 0
         while not self.shutdown.is_set():
@@ -287,19 +301,26 @@ class Plotter(threading.Thread):
                 if self.clear.is_set():
                     # then send hold and request tinyg queue flush
                     # https://github.com/synthetos/TinyG/wiki/TinyG-Feedhold-and-Resume
-                    # the ! does not emit a response, but the % does "{rx:254}"
-                    # these are both single character commands, no newline needed
-                    msg = '!%'
+                    # The ! and ~ do not emit responses, but % does "{rx:254}".
+                    # Resume after flushing so later jog/home commands are not left in feedhold.
+                    msg = ('!%~', 1, 'clear')
                     log(f'plotter> clearing queue')
                     self.clear_queue()
                     self.clear.clear()
                 else:
                     msg = self.queue.get(timeout=1)
                     queue_previously_empty = False
+                if isinstance(msg, tuple):
+                    msg, expected_responses, response_label = msg
+                else:
+                    expected_responses = 1
+                    response_label = None
                 # log(f'msg> {repr(msg)}')
                 self.ser.write(msg.encode('ascii'))
                 self.ser.flush()
-                read_queue_size += 1
+                read_queue_size += expected_responses
+                for _ in range(expected_responses):
+                    response_labels.append(response_label)
             except queue.Empty:
                 if not queue_previously_empty:
                     log('plotter> queue empty')
@@ -323,8 +344,12 @@ class Plotter(threading.Thread):
                             if not msg:
                                 log('plotter> read timeout')
                                 read_queue_size = 0
+                                response_labels.clear()
                                 break
                             read_queue_size -= 1
+                            response_label = response_labels.popleft() if response_labels else None
+                            if response_label:
+                                log(f'plotter> {response_label} response {msg!r}')
                             # log(f'plotter> blast response {repr(msg)}')
                             # this message signifies that the freehold is finished
                             # and there is nothing left in the read queue, but it 
@@ -337,8 +362,12 @@ class Plotter(threading.Thread):
                         if not msg:
                             log('plotter> read timeout')
                             read_queue_size = 0
+                            response_labels.clear()
                             continue
                         read_queue_size -= 1
+                        response_label = response_labels.popleft() if response_labels else None
+                        if response_label:
+                            log(f'plotter> {response_label} response {msg!r}')
                         # log(f'plotter> single response {repr(msg)}')
                         if msg == b'{"rx":254}\n':
                             log(f'plotter> finished at (b)', read_queue_size)
@@ -427,7 +456,9 @@ def button_light_on():
 @app.route('/')
 def index():
     with open('index.html') as f:
-        return f.read()
+        response = flask.Response(f.read(), mimetype='text/html')
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 @app.route('/go')
 def go():
@@ -443,7 +474,7 @@ def go():
 def home():
     if not plotter.connected:
         return {'error': 'plotter is disconnected'}, 503
-    plotter.home()
+    plotter.force_home()
     return '',200
 
 @app.route('/draw', methods=['POST'])
@@ -508,6 +539,38 @@ def shutter():
         return {'error': str(e)}, 502
     return {'state': plotter.state.name, 'button_light': button_light_on(), 'request_id': request_id}, 202
 
+@app.route('/camera-preview.jpg')
+def camera_preview():
+    try:
+        response = requests.get(camera_preview_url, timeout=10)
+        response.raise_for_status()
+    except requests.RequestException as e:
+        log('camera-preview> camera request failed', e)
+        return {'error': str(e)}, 502
+    return flask.Response(response.content, mimetype=response.headers.get('Content-Type', 'image/jpeg'))
+
+@app.route('/camera-settings', methods=['GET', 'POST'])
+def camera_settings():
+    try:
+        if flask.request.method == 'POST':
+            response = requests.post(
+                camera_settings_url,
+                json=flask.request.get_json(silent=True) or {},
+                timeout=5,
+            )
+        else:
+            response = requests.get(camera_settings_url, timeout=5)
+        body = response.json()
+    except requests.RequestException as e:
+        log('camera-settings> camera request failed', e)
+        return {'error': str(e)}, 502
+    except ValueError as e:
+        log('camera-settings> invalid camera response', e)
+        return {'error': str(e)}, 502
+    if response.status_code >= 400:
+        return body, response.status_code
+    return body, response.status_code
+
 @app.route('/capture-result', methods=['POST'])
 def capture_result():
     body = flask.request.get_json(silent=True) or {}
@@ -547,6 +610,9 @@ def button():
     elif plotter.state == State.DRAWING:
         log('button> reset()')
         plotter.reset_to_beginning()
+    elif plotter.state == State.POSITIONED:
+        log('button> home from positioned')
+        home()
     elif plotter.state == State.POSTDRAW:
         log('button> home()')
         home()
