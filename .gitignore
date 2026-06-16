@@ -9,6 +9,7 @@ vectors.json
 
 .ipynb_checkpoints
 .vscode
+.run/
 
 potrace*
 cld

@@ -93,6 +93,13 @@
 	      max-width: 520px;
 	    }
 
+	    .endpoint-row {
+	      display: grid;
+	      grid-template-columns: minmax(130px, auto) minmax(220px, 1fr) auto;
+	      gap: 10px;
+	      align-items: center;
+	    }
+
 	    .toggle-row,
 	    .slider-row {
 	      display: grid;
@@ -115,9 +122,24 @@
 	      height: 24px;
 	    }
 
-	    input[type="range"] {
+	    input[type="url"] {
 	      width: 100%;
+	      min-height: 44px;
+	      border: 1px solid #999;
+	      border-radius: 6px;
+	      background: #fff;
+	      color: #111;
+	      font: inherit;
+	      padding: 10px 12px;
 	    }
+
+    input[type="range"] {
+      width: 100%;
+    }
+
+    .hidden-input {
+      display: none;
+    }
 
 	    .value-text {
 	      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -192,7 +214,8 @@
 	      }
 
 	      .toggle-row,
-	      .slider-row {
+	      .slider-row,
+	      .endpoint-row {
 	        grid-template-columns: 1fr;
 	      }
 
@@ -204,6 +227,7 @@
   <script>
     const dim = 400;
     let previewPath = [];
+    let pendingPathPreviewed = false;
 
     function setText(id, text) {
       document.getElementById(id).innerText = text;
@@ -233,9 +257,32 @@
       getJson("/status")
         .then((status) => {
           setText("status", JSON.stringify(status, null, 2));
+          maybePreviewReadyPath(status);
         })
         .catch((error) => {
           setText("status", `Status failed: ${error.message}`);
+        });
+    }
+
+    function maybePreviewReadyPath(status) {
+      if (!status || status.state !== "READY" || !status.has_pending_path) {
+        pendingPathPreviewed = false;
+        return;
+      }
+      if (pendingPathPreviewed) {
+        return;
+      }
+      pendingPathPreviewed = true;
+      setText("upload-status", "Previewing ready path...");
+      getJson("/pending-path")
+        .then((body) => {
+          previewJson(body.path || body);
+          document.getElementById("json-plot-grid").classList.remove("no-preview");
+          setText("upload-status", "Ready path preview.");
+        })
+        .catch((error) => {
+          pendingPathPreviewed = false;
+          setText("upload-status", `Ready path preview failed: ${error.message}`);
         });
     }
 
@@ -345,6 +392,46 @@
 	          takePreviewPhoto();
 	        })
 	        .catch(() => {});
+	    }
+
+	    function loadProcessorEndpoint() {
+	      setText("processor-endpoint-status", "Loading...");
+	      getJson("/processor-endpoint")
+	        .then((body) => {
+	          document.getElementById("processor-endpoint-url").value = body.url || "";
+	          setText("processor-endpoint-status", "Loaded.");
+	        })
+	        .catch((error) => {
+	          setText("processor-endpoint-status", `Load failed: ${error.message}`);
+	        });
+	    }
+
+	    function applyProcessorEndpoint() {
+	      const url = document.getElementById("processor-endpoint-url").value.trim();
+	      setText("processor-endpoint-status", "Applying...");
+	      fetch("/processor-endpoint", {
+	        method: "POST",
+	        headers: {
+	          "Content-Type": "application/json",
+	        },
+	        body: JSON.stringify({ url }),
+	      })
+	        .then(async (response) => {
+	          const body = await response.json().catch(() => ({}));
+	          if (!response.ok) {
+	            throw new Error(body.error || response.statusText);
+	          }
+	          return body;
+	        })
+	        .then((body) => {
+	          document.getElementById("processor-endpoint-url").value = body.url || url;
+	          setText("processor-endpoint-status", "Applied.");
+	          checkStatus();
+	        })
+	        .catch((error) => {
+	          setText("processor-endpoint-status", `Apply failed: ${error.message}`);
+	          checkStatus();
+	        });
 	    }
 
     function pointsFromJson(payload) {
@@ -490,8 +577,54 @@
         });
     }
 
+    function selectedPhotoFile() {
+      return document.getElementById("photo-file").files[0];
+    }
+
+    function choosePhoto() {
+      document.getElementById("photo-file").click();
+    }
+
+    function uploadSelectedPhoto() {
+      const file = selectedPhotoFile();
+      if (!file) {
+        setText("photo-upload-status", "");
+        return;
+      }
+      const form = new FormData();
+      form.append("image", file);
+      setText("photo-upload-status", "Uploading...");
+      fetch("/photo-upload", {
+        method: "POST",
+        body: form,
+      })
+        .then(async (response) => {
+          const body = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(body.error || response.statusText);
+          }
+          return body;
+        })
+        .then((body) => {
+          if (Number.isFinite(body.point_count)) {
+            setText("photo-upload-status", `Ready with ${body.point_count} points.`);
+          } else {
+            setText("photo-upload-status", "Ready.");
+          }
+          checkStatus();
+        })
+        .catch((error) => {
+          setText("photo-upload-status", `Upload failed: ${error.message}`);
+          checkStatus();
+        })
+        .finally(() => {
+          document.getElementById("photo-file").value = "";
+        });
+    }
+
 	    window.addEventListener("load", () => {
 	      checkStatus();
+	      loadProcessorEndpoint();
 	      loadCameraSettings();
 	      setInterval(checkStatus, 1000);
 	    });
@@ -547,6 +680,27 @@
 	        </div>
 	      </div>
 	      <div class="status-text" id="camera-settings-status"></div>
+	    </section>
+
+	    <section>
+	      <h2>Processor Endpoint</h2>
+	      <div class="control-panel">
+	        <div class="endpoint-row">
+	          <label for="processor-endpoint-url">URL</label>
+	          <input id="processor-endpoint-url" type="url" autocomplete="off" spellcheck="false" />
+	          <button class="primary" onclick="applyProcessorEndpoint()">Apply</button>
+	        </div>
+	      </div>
+	      <div class="status-text" id="processor-endpoint-status"></div>
+	    </section>
+
+	    <section>
+	      <h2>Photo Capture</h2>
+	      <input class="hidden-input" id="photo-file" type="file" accept="image/*" onchange="uploadSelectedPhoto()" />
+	      <div class="actions">
+	        <button class="primary" onclick="choosePhoto()">Choose or Take Photo</button>
+	      </div>
+	      <div class="status-text" id="photo-upload-status"></div>
 	    </section>
 
 	    <section>

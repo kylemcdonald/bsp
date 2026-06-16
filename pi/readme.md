@@ -2,12 +2,13 @@
 
 This Pi runs three small services:
 
-- `plotter`: receives planned vector paths and streams G-code to TinyG.
-- `camera`: captures a full webcam JPEG and sends it to the configured processor.
+- `plotter`: receives planned vector paths, sends images to the configured
+  processor, and streams G-code to TinyG.
+- `camera`: captures a full webcam JPEG and sends it to the plotter service.
 - `button`: watches the GPIO button and calls the plotter service.
 
 The Pi no longer runs local face detection, eye detection, blink detection, dlib,
-TFLite, or Coral code. The camera service sends the full `.jpg` to the
+TFLite, or Coral code. The plotter service sends the full `.jpg` to the
 configured `BSP_VIBECHECK_URL` or `BSP_PROCESS_URL`, and that remote service is
 responsible for image analysis/cropping/vectorization.
 
@@ -146,25 +147,32 @@ journalctl -u button -f
 
 The services optionally read `/etc/bsp.env`.
 
-Create it if the processor endpoint or local ports need to change:
+Create it if the processor endpoint needs to change:
 
 ```sh
 sudo cp ~/bsp/pi/bsp.env.example /etc/bsp.env
 sudo nano /etc/bsp.env
-sudo systemctl restart camera plotter
+sudo systemctl restart plotter
 ```
 
 Available settings:
 
 - `BSP_VIBECHECK_URL`: base URL for the full-frame vector processing API, default `http://vibecheck.taildd340.ts.net:8787`; for RunPod use its full `https://...` base URL if provided
-- `BSP_PROCESS_URL`: optional full process endpoint override, default `$BSP_VIBECHECK_URL/api/process`
-- `BSP_PLOTTER_CAPTURE_RESULT_URL`: local plotter endpoint used by the camera after processor response, default `http://localhost:8080/capture-result`
+- `BSP_PROCESS_URL`: optional full process endpoint override, default `$BSP_VIBECHECK_URL/api/process`; only `plotter.service` uses this setting
+- `BSP_PLOTTER_CAPTURE_IMAGE_URL`: local plotter endpoint used by the camera after JPEG capture, default `http://localhost:8080/capture-image`
 - `BSP_PLOTTER_CAPTURE_ERROR_URL`: local plotter endpoint used by the camera when capture or processing fails, default `http://localhost:8080/capture-error`
 - `BSP_CAMERA_SHUTTER_URL`: local camera shutter endpoint used by the plotter
 - `BSP_CAMERA_PREVIEW_URL`: local camera preview endpoint used by the plotter web UI, default `http://localhost:8081/preview.jpg`
 - `BSP_CAMERA_SETTINGS_URL`: local camera settings endpoint used by the plotter web UI, default `http://localhost:8081/settings`
 - `BSP_CAMERA_DEVICE`: V4L2 camera device used for camera controls, default `/dev/video0`
 - `BSP_TINYG_PORT`: optional TinyG serial device override, for example `/dev/ttyUSB0`
+
+Restart both `camera` and `plotter` after changing local camera/plotter URLs or
+the camera device:
+
+```sh
+sudo systemctl restart camera plotter
+```
 
 ## Hardware Checks
 
@@ -193,6 +201,10 @@ Plotter:
 - `POST http://localhost:8080/draw`
 - `POST http://localhost:8080/draw-json`
 - `GET http://localhost:8080/camera-preview.jpg`
+- `GET http://localhost:8080/processor-endpoint`
+- `POST http://localhost:8080/processor-endpoint`
+- `GET http://localhost:8080/pending-path`
+- `POST http://localhost:8080/capture-image`
 - `POST http://localhost:8080/capture-result`
 - `POST http://localhost:8080/capture-error`
 
@@ -208,7 +220,7 @@ Button:
 
 - short press calls `http://localhost:8080/button`; when the plotter is home this triggers a camera capture and turns the button light off, when the capture result is ready the button light turns on, the next press draws that stored result, and a press while drawing resets to the beginning state
 - while the button light is off, button presses are ignored locally by the button service
-- capture, processor, or result-post failures are reported back to the plotter, which returns to `HOME` with `last_error` set in `/status`
+- capture and processor failures are reported in the plotter state, which returns to `HOME` with `last_error` set in `/status`; the button LED flashes at 10Hz until the next press, which starts a new capture
 - long press for more than 5 seconds homes the plotter and shuts down the Pi
 
 ## Processor Response Schema
@@ -231,8 +243,13 @@ or the full process API shape:
 {"vector": {"continuous_path": {"points": [[0, 0], [1, 1]]}}}
 ```
 
-The camera service posts the `vector` object from the process response to
-`/capture-result`. The plotter stores it until the next valid button press.
+The plotter extracts and stores the `vector` object from the process response
+until the next valid button press.
+
+The processor endpoint can also be changed at runtime from the plotter web UI
+or by posting `{"url": "https://host/api/process"}` to `/processor-endpoint`.
+This runtime value is not written back to `/etc/bsp.env`; the env file remains
+the startup default after a service restart.
 
 All planned paths are rotated 180 degrees at the plotter planning layer before
 G-code is generated, regardless of whether they arrive from the web interface,

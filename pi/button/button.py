@@ -18,6 +18,7 @@ last_press = None
 shutdown_requested = False
 button_light_enabled = True
 plotter_state = None
+plotter_last_error = None
 plotter_ready = False
 camera_ready = False
 last_status_poll = 0
@@ -28,6 +29,7 @@ button_url = 'http://localhost:8080/button'
 status_url = 'http://localhost:8080/status'
 camera_status_url = 'http://localhost:8081/status'
 flash_interval = 0.25
+error_flash_interval = 0.05
 shutdown_hold_seconds = 5
 
 led = LED(led_pin)
@@ -51,11 +53,12 @@ def get(url):
     get_json(url)
 
 def apply_status(payload):
-    global button_light_enabled, plotter_ready, plotter_state
+    global button_light_enabled, plotter_last_error, plotter_ready, plotter_state
     if not isinstance(payload, dict):
         plotter_ready = False
         return
     plotter_state = payload.get('state', plotter_state)
+    plotter_last_error = payload.get('last_error', plotter_last_error)
     plotter_ready = bool(payload.get('connected', plotter_ready))
     button_light_enabled = bool(payload.get('button_light', True))
 
@@ -67,8 +70,9 @@ def update_led(now):
     if shutdown_requested:
         return
 
-    if not services_ready() or plotter_state == 'CAPTURING':
-        if now - last_flash_toggle >= flash_interval:
+    if not services_ready() or plotter_state == 'CAPTURING' or plotter_last_error:
+        interval = error_flash_interval if services_ready() and plotter_last_error else flash_interval
+        if now - last_flash_toggle >= interval:
             last_flash_toggle = now
             flash_on = not flash_on
             if flash_on:
@@ -107,7 +111,7 @@ def button_hold(now, seconds):
         subprocess.call(['sudo', '/usr/sbin/shutdown', '-h', 'now'], shell=False)
     
 def button_release(now, seconds):
-    global last_flash_toggle, flash_on
+    global last_flash_toggle, flash_on, plotter_last_error
     if shutdown_requested:
         return
     if not services_ready():
@@ -118,7 +122,7 @@ def button_release(now, seconds):
         return
     print('button release')
     if plotter_state == 'HOME':
-        apply_status({'button_light': False, 'state': 'CAPTURING'})
+        apply_status({'button_light': False, 'last_error': None, 'state': 'CAPTURING'})
         last_flash_toggle = time.monotonic()
         flash_on = True
         led.on()

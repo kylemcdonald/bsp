@@ -10,6 +10,7 @@ import time
 import uuid
 from collections import deque
 from enum import Enum
+from urllib.parse import urlparse
 
 import requests
 import flask
@@ -23,6 +24,9 @@ limit_position = (100, 100)
 camera_url = os.environ.get('BSP_CAMERA_SHUTTER_URL', 'http://localhost:8081/shutter')
 camera_preview_url = os.environ.get('BSP_CAMERA_PREVIEW_URL', 'http://localhost:8081/preview.jpg')
 camera_settings_url = os.environ.get('BSP_CAMERA_SETTINGS_URL', 'http://localhost:8081/settings')
+api_base_url = (os.environ.get('BSP_VIBECHECK_URL') or 'http://vibecheck.taildd340.ts.net:8787').rstrip('/')
+process_url = os.environ.get('BSP_PROCESS_URL') or f'{api_base_url}/api/process'
+process_url_lock = threading.Lock()
 tinyg_port = os.environ.get('BSP_TINYG_PORT')
 tinyg_motion_params = {
     'xjm': 2000,
@@ -32,6 +36,10 @@ tinyg_motion_params = {
 }
 reconnect_interval = 1
 post_draw_home_delay_seconds = 10
+tinyg_idle_status = 3
+tinyg_idle_poll_interval_seconds = 0.25
+tinyg_idle_timeout_seconds = 120
+request_timeout = 120
 
 State = Enum('State', 'HOME POSITIONED HOMING CAPTURING READY DRAWING POSTDRAW')
 
@@ -159,6 +167,7 @@ class Plotter(threading.Thread):
         self.state = State.HOME
         self.pending_path = None
         self.pending_capture = None
+        self.last_capture_timings = None
         self.last_error = 'plotter disconnected'
 
     def clear_queue(self):
@@ -304,6 +313,68 @@ class Plotter(threading.Thread):
         log('plotter> sending shutdown')
         self.shutdown.set()
         super().join()
+
+    def home_after_tinyg_clear(self):
+        if not self.home_after_clear:
+            return
+        self.home_after_clear = False
+        self.go(*home_position, state=State.HOMING)
+
+    def tinyg_status(self, msg):
+        try:
+            parsed = json.loads(msg.decode('utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        if 'sr' in parsed:
+            return parsed['sr']
+        response = parsed.get('r')
+        if isinstance(response, dict) and 'sr' in response:
+            return response['sr']
+        return None
+
+    def query_tinyg_idle(self, response_timeout=2):
+        old_timeout = self.ser.timeout
+        self.ser.timeout = min(old_timeout or tinyg_idle_poll_interval_seconds, tinyg_idle_poll_interval_seconds)
+        try:
+            self.ser.write(b'{"sr":null}\n')
+            self.ser.flush()
+            deadline = time.monotonic() + response_timeout
+            while time.monotonic() < deadline:
+                msg = self.ser.read_until()
+                if not msg:
+                    continue
+                status = self.tinyg_status(msg)
+                if not status:
+                    continue
+                stat = status.get('stat')
+                if stat is None:
+                    continue
+                return stat == tinyg_idle_status, stat
+        finally:
+            self.ser.timeout = old_timeout
+        return False, None
+
+    def wait_for_tinyg_idle(self, label, timeout=tinyg_idle_timeout_seconds):
+        deadline = time.monotonic() + timeout
+        next_log = 0
+        last_stat = None
+        while time.monotonic() < deadline:
+            if self.shutdown.is_set() or self.clear.is_set():
+                return False
+            idle, stat = self.query_tinyg_idle()
+            if stat is not None:
+                last_stat = stat
+            if idle:
+                log(f'plotter> TinyG idle after {label}')
+                return True
+            if time.monotonic() >= next_log:
+                log(f'plotter> waiting for TinyG idle after {label}', f'stat={last_stat}')
+                next_log = time.monotonic() + 2
+            if self.clear.wait(tinyg_idle_poll_interval_seconds):
+                return False
+        self.last_error = f'timed out waiting for TinyG idle after {label}; last stat={last_stat}'
+        log('plotter>', self.last_error)
+        return False
         
     # todo: write this part in a way that sends a bunch of commands quickly
     # if there are enough commands to send, and then cleans up the responses
@@ -348,9 +419,6 @@ class Plotter(threading.Thread):
                 read_queue_size += expected_responses
                 for _ in range(expected_responses):
                     response_labels.append(response_label)
-                if response_label == 'clear' and self.home_after_clear:
-                    self.home_after_clear = False
-                    self.go(*home_position, state=State.HOMING)
             except queue.Empty:
                 if not queue_previously_empty:
                     log('plotter> queue empty')
@@ -387,6 +455,7 @@ class Plotter(threading.Thread):
                             if msg == b'{"rx":254}\n':
                                 log(f'plotter> finished at (a)', read_queue_size)
                                 read_queue_size = 0
+                                self.home_after_tinyg_clear()
                     else:
                         msg = self.ser.read_until()
                         if not msg:
@@ -402,16 +471,23 @@ class Plotter(threading.Thread):
                         if msg == b'{"rx":254}\n':
                             log(f'plotter> finished at (b)', read_queue_size)
                             read_queue_size = 0
+                            self.home_after_tinyg_clear()
                 if read_queue_size == 0 and self.queue.empty() and self.state == State.DRAWING:
-                    log(f'plotter> finished drawing, waiting {post_draw_home_delay_seconds}s to go home')
-                    self.state = State.POSTDRAW
-                    if not self.clear.wait(post_draw_home_delay_seconds):
-                        self.home()
-                    else:
-                        self.state = State.POSITIONED
+                    log('plotter> drawing commands accepted, waiting for TinyG idle')
+                    if self.wait_for_tinyg_idle('draw') and self.state == State.DRAWING and self.queue.empty():
+                        log(f'plotter> finished drawing, waiting {post_draw_home_delay_seconds}s to go home')
+                        self.state = State.POSTDRAW
+                        if not self.clear.wait(post_draw_home_delay_seconds):
+                            self.home()
+                        else:
+                            self.state = State.POSITIONED
                 elif read_queue_size == 0 and self.queue.empty() and self.state == State.HOMING:
-                    log('plotter> home complete')
-                    self.state = State.HOME
+                    if self.home_after_clear:
+                        continue
+                    log('plotter> homing command accepted, waiting for TinyG idle')
+                    if self.wait_for_tinyg_idle('home') and self.state == State.HOMING and self.queue.empty():
+                        log('plotter> home complete')
+                        self.state = State.HOME
             except serial.SerialTimeoutException:
                 log('plotter> timeout')
             except serial.SerialException as e:
@@ -486,8 +562,108 @@ def count_points(path_payload):
     except (KeyError, TypeError):
         return None
 
+def extract_vector_payload(process_payload):
+    if not isinstance(process_payload, dict):
+        raise ValueError('process response must be a JSON object')
+    vector_payload = process_payload.get('vector', process_payload)
+    if count_points(vector_payload) is None:
+        raise ValueError('process response did not contain vector.continuous_path.points')
+    return vector_payload
+
 def button_light_on():
     return plotter.state in (State.HOME, State.READY, State.DRAWING, State.POSITIONED)
+
+def get_process_url():
+    with process_url_lock:
+        return process_url
+
+def set_process_url(next_url):
+    global process_url
+    if not isinstance(next_url, str):
+        raise ValueError('processor endpoint must be a URL string')
+    next_url = next_url.strip()
+    parsed = urlparse(next_url)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        raise ValueError('processor endpoint must be an http or https URL')
+    if not parsed.path or parsed.path == '/':
+        next_url = next_url.rstrip('/') + '/api/process'
+    with process_url_lock:
+        process_url = next_url
+    log('processor-endpoint> set', process_url)
+    return process_url
+
+def process_uploaded_capture(upload, request_id, source='photo-upload', initial_timings=None):
+    timings = {
+        'request_id': request_id,
+        'upload_received_at': time.perf_counter(),
+    }
+    if isinstance(initial_timings, dict):
+        timings.update(initial_timings)
+    filename = upload.filename or 'upload.jpg'
+    mimetype = upload.mimetype or 'application/octet-stream'
+    try:
+        log(f'{source}> post image to process api')
+        timings['server_request_started_at'] = time.perf_counter()
+        response = requests.post(
+            get_process_url(),
+            files={'image': (filename, upload.stream, mimetype)},
+            timeout=request_timeout,
+        )
+        timings['server_response_received_at'] = time.perf_counter()
+        response.raise_for_status()
+        process_payload = response.json()
+        vector_payload = extract_vector_payload(process_payload)
+        point_count = count_points(vector_payload)
+        result_timings = {
+            'request_id': request_id,
+            'server_round_trip_ms': (
+                timings['server_response_received_at'] - timings['server_request_started_at']
+            ) * 1000,
+        }
+        if 'photo_trigger_to_receive_ms' in timings:
+            result_timings['photo_trigger_to_receive_ms'] = timings['photo_trigger_to_receive_ms']
+        if 'photo_receive_to_encoded_ms' in timings:
+            result_timings['photo_receive_to_encoded_ms'] = timings['photo_receive_to_encoded_ms']
+        if 'photo_encoded_to_plotter_request_started_ms' in timings:
+            result_timings['photo_encoded_to_plotter_request_started_ms'] = (
+                timings['photo_encoded_to_plotter_request_started_ms']
+            )
+            result_timings['photo_encoded_to_server_request_started_ms'] = (
+                timings['photo_encoded_to_plotter_request_started_ms']
+                + (timings['server_request_started_at'] - timings['upload_received_at']) * 1000
+            )
+        plotter.finish_capture(
+            request_id,
+            vector_payload,
+            timings=result_timings,
+        )
+        log(f'{source}> ready', point_count, 'points')
+        return {
+            'state': plotter.state.name,
+            'button_light': button_light_on(),
+            'request_id': request_id,
+            'point_count': point_count,
+        }, 200
+    except requests.exceptions.ConnectionError:
+        error = 'capture request connection error'
+    except requests.exceptions.Timeout:
+        error = 'capture request timeout'
+    except requests.exceptions.HTTPError as e:
+        error = f'capture request http error: {e}'
+    except requests.exceptions.JSONDecodeError:
+        error = 'capture response JSON error'
+    except ValueError as e:
+        error = str(e)
+    except RuntimeError as e:
+        error = str(e)
+
+    log(f'{source}> failed', error)
+    try:
+        plotter.fail_capture(request_id, error)
+    except RuntimeError as e:
+        log(f'{source}> failed to reset capture state', e)
+        return {'error': str(e), 'state': plotter.state.name, 'button_light': button_light_on()}, 400
+    return {'error': error, 'state': plotter.state.name, 'button_light': button_light_on()}, 502
 
 @app.route('/')
 def index():
@@ -613,6 +789,55 @@ def camera_settings():
         return body, response.status_code
     return body, response.status_code
 
+@app.route('/processor-endpoint', methods=['GET', 'POST'])
+def processor_endpoint():
+    if flask.request.method == 'POST':
+        body = flask.request.get_json(silent=True) or {}
+        try:
+            endpoint = set_process_url(body.get('url'))
+        except ValueError as e:
+            log('processor-endpoint> invalid url', e)
+            return {'error': str(e), 'url': get_process_url()}, 400
+        return {'url': endpoint}, 200
+    return {'url': get_process_url()}, 200
+
+@app.route('/photo-upload', methods=['POST'])
+def photo_upload():
+    log('photo-upload> received')
+    if not plotter.can_start_capture():
+        return {
+            'error': f'cannot start capture while state is {plotter.state.name}',
+            'state': plotter.state.name,
+            'button_light': button_light_on(),
+        }, 409
+    upload = flask.request.files.get('image') or flask.request.files.get('file')
+    if upload is None or upload.filename == '':
+        return {'error': 'missing image upload'}, 400
+    request_id = plotter.begin_capture()
+    return process_uploaded_capture(upload, request_id)
+
+@app.route('/capture-image', methods=['POST'])
+def capture_image():
+    log('capture-image> received')
+    request_id = flask.request.form.get('request_id')
+    if not request_id:
+        return {'error': 'missing request_id'}, 400
+    upload = flask.request.files.get('image') or flask.request.files.get('file')
+    if upload is None or upload.filename == '':
+        try:
+            plotter.fail_capture(request_id, 'missing capture image upload')
+        except RuntimeError as e:
+            log('capture-image> invalid missing-image report', e)
+            return {'error': str(e), 'state': plotter.state.name, 'button_light': button_light_on()}, 400
+        return {'error': 'missing capture image upload'}, 400
+    raw_timings = flask.request.form.get('timings')
+    try:
+        timings = json.loads(raw_timings) if raw_timings else None
+    except json.JSONDecodeError as e:
+        log('capture-image> invalid timings JSON', e)
+        timings = None
+    return process_uploaded_capture(upload, request_id, source='capture-image', initial_timings=timings)
+
 @app.route('/capture-result', methods=['POST'])
 def capture_result():
     body = flask.request.get_json(silent=True) or {}
@@ -675,6 +900,12 @@ def button():
         return {'state': plotter.state.name, 'button_light': button_light_on(), 'ignored': True}, 200
     return {'state': plotter.state.name, 'button_light': button_light_on()}, 200
 
+@app.route('/pending-path')
+def pending_path():
+    if plotter.pending_path is None:
+        return {'error': 'no pending path'}, 404
+    return {'path': plotter.pending_path}, 200
+
 @app.route('/status')	
 def status():
     return {
@@ -686,6 +917,7 @@ def status():
         'has_pending_path': plotter.pending_path is not None,
         'last_capture_timings': plotter.last_capture_timings,
         'last_error': plotter.last_error,
+        'processor_endpoint': get_process_url(),
     }
 
 serve(app, listen='*:8080')

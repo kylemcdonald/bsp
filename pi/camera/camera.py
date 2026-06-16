@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 import cv2
+import json
 import time
 import threading
 import datetime
@@ -15,16 +16,13 @@ from waitress import serve
 from flushed import log
 from wait_for_format import wait_for_format
 
-api_base_url = (os.environ.get('BSP_VIBECHECK_URL') or 'http://vibecheck.taildd340.ts.net:8787').rstrip('/')
-process_url = os.environ.get('BSP_PROCESS_URL') or f'{api_base_url}/api/process'
-plotter_result_url = os.environ.get('BSP_PLOTTER_CAPTURE_RESULT_URL', 'http://localhost:8080/capture-result')
+plotter_capture_image_url = os.environ.get('BSP_PLOTTER_CAPTURE_IMAGE_URL', 'http://localhost:8080/capture-image')
 plotter_error_url = os.environ.get('BSP_PLOTTER_CAPTURE_ERROR_URL', 'http://localhost:8080/capture-error')
 jpeg_quality = 50
 request_timeout = 120
 camera_device = os.environ.get('BSP_CAMERA_DEVICE', '/dev/video0')
 
-log('using process endpoint', process_url)
-log('using plotter capture result endpoint', plotter_result_url)
+log('using plotter capture image endpoint', plotter_capture_image_url)
 log('using plotter capture error endpoint', plotter_error_url)
 
 camera_control_specs = {
@@ -104,26 +102,6 @@ def set_camera_settings(payload):
 
     return get_camera_settings()
 
-def count_points(path_payload):
-    if not isinstance(path_payload, dict):
-        return None
-    if 'coordinates' in path_payload:
-        return len(path_payload['coordinates'])
-    if 'vector' in path_payload:
-        return count_points(path_payload['vector'])
-    try:
-        return len(path_payload['continuous_path']['points'])
-    except (KeyError, TypeError):
-        return None
-
-def extract_vector_payload(process_payload):
-    if not isinstance(process_payload, dict):
-        raise ValueError('process response must be a JSON object')
-    vector_payload = process_payload.get('vector', process_payload)
-    if count_points(vector_payload) is None:
-        raise ValueError('process response did not contain vector.continuous_path.points')
-    return vector_payload
-
 def save_to_disk(data, directory, extension):
     now = datetime.datetime.now()
     os.makedirs(directory, exist_ok=True)
@@ -193,54 +171,38 @@ class Camera(threading.Thread):
 
         save_to_disk(encimg, 'images', '.jpg')
 
-        # send to endpoint
+        # Send the image to the local plotter service. The plotter owns remote
+        # processing so manual uploads and camera captures share one path.
         data = encimg.tobytes()
         files = {
             'image': ('capture.jpg', data, 'image/jpeg'),
         }
         try:
-            log('camera> post jpg to process api')
-            timings['server_request_started_at'] = time.perf_counter()
+            log('camera> post jpg to plotter')
+            timings['plotter_request_started_at'] = time.perf_counter()
             response = requests.post(
-                process_url,
+                plotter_capture_image_url,
+                data={
+                    'request_id': request_id,
+                    'timings': json.dumps(summarize_timings(timings)),
+                },
                 files=files,
                 timeout=request_timeout,
             )
-            timings['server_response_received_at'] = time.perf_counter()
+            timings['plotter_response_received_at'] = time.perf_counter()
             response.raise_for_status()
-            process_payload = response.json()
-            vector_payload = extract_vector_payload(process_payload)
-            point_count = count_points(vector_payload)
-            if point_count is None:
-                log('camera> process response received')
-            else:
-                log(f'camera> process response {point_count} points')
-            response = requests.post(
-                plotter_result_url,
-                json={
-                    'request_id': request_id,
-                    'path': vector_payload,
-                    'process_response': process_payload,
-                    'timings': summarize_timings(timings),
-                },
-                timeout=request_timeout,
-            )
-            response.raise_for_status()
+            log('camera> plotter accepted capture image')
         except requests.exceptions.ConnectionError:
             log('camera> connection error')
-            report_capture_error(request_id, 'capture request connection error')
+            report_capture_error(request_id, 'plotter image post connection error')
         except requests.exceptions.Timeout:
             log('camera> request timeout')
-            report_capture_error(request_id, 'capture request timeout')
+            report_capture_error(request_id, 'plotter image post timeout')
         except requests.exceptions.HTTPError as e:
             log('camera> http error', e)
-            report_capture_error(request_id, f'capture request http error: {e}')
-        except requests.exceptions.JSONDecodeError:
-            log('camera> JSON response error')
-            report_capture_error(request_id, 'capture response JSON error')
-        except ValueError as e:
-            log('camera> invalid process response', e)
-            report_capture_error(request_id, str(e))
+            # Plotter HTTP errors are expected to include its own capture-state
+            # update; avoid reporting a second failure for the same request.
+            pass
 
     def preview_jpeg(self):
         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
@@ -271,13 +233,19 @@ app = Flask(__name__)
 camera = Camera()
 
 def summarize_timings(timings):
-    return {
+    summary = {
         'request_id': timings['request_id'],
         'photo_trigger_to_receive_ms': (timings['photo_received_at'] - timings['trigger_received_at']) * 1000,
         'photo_receive_to_encoded_ms': (timings['photo_encoded_at'] - timings['photo_received_at']) * 1000,
-        'photo_encoded_to_transmit_started_ms': (timings['server_request_started_at'] - timings['photo_encoded_at']) * 1000,
-        'server_round_trip_ms': (timings['server_response_received_at'] - timings['server_request_started_at']) * 1000,
+        'photo_encoded_to_plotter_request_started_ms': (
+            timings['plotter_request_started_at'] - timings['photo_encoded_at']
+        ) * 1000,
     }
+    if 'plotter_response_received_at' in timings:
+        summary['plotter_round_trip_ms'] = (
+            timings['plotter_response_received_at'] - timings['plotter_request_started_at']
+        ) * 1000
+    return summary
 
 @app.route('/shutter')
 def shutter():
