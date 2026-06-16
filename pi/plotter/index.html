@@ -75,11 +75,6 @@
       color: #fff;
     }
 
-    button.danger {
-      border-color: #9b1c1c;
-      color: #9b1c1c;
-    }
-
 	    input[type="file"] {
 	      width: 100%;
 	      min-height: 44px;
@@ -638,10 +633,9 @@
     <section>
       <h2>Machine</h2>
       <div class="actions">
-        <button onclick="runMachineCommand('Min', '/go?x=0&y=0')">Min</button>
+        <button onclick="runMachineCommand('Min', '/min')">Min</button>
         <button onclick="runMachineCommand('Home', '/home')">Home</button>
-        <button onclick="runMachineCommand('Max', '/go?x=100&y=100')">Max</button>
-        <button class="danger" onclick="runMachineCommand('Stop', '/stop')">Stop</button>
+        <button onclick="runMachineCommand('Max', '/max')">Max</button>
         <button class="primary" onclick="runMachineCommand('Button', '/button')">Button</button>
       </div>
       <div class="status-text" id="command-status"></div>

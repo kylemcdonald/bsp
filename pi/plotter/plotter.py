@@ -34,14 +34,13 @@ tinyg_motion_params = {
     'xvm': 3000,
     'yvm': 3000,
 }
-reconnect_interval = 1
 post_draw_home_delay_seconds = 10
 tinyg_idle_status = 3
 tinyg_idle_poll_interval_seconds = 0.25
 tinyg_idle_timeout_seconds = 120
 request_timeout = 120
 
-State = Enum('State', 'HOME POSITIONED HOMING CAPTURING READY DRAWING POSTDRAW')
+State = Enum('State', 'HOME POSITIONED CENTERING RETURNING_HOME CAPTURING READY DRAWING POSTDRAW ERROR')
 
 import sys
 def log(*args):
@@ -94,26 +93,28 @@ class Plotter(threading.Thread):
         self.queue = queue.Queue()
         self.shutdown = threading.Event()
         self.clear = threading.Event()
-        self.state = State.HOME
+        self.state = State.ERROR
         self.ready = True
         self.pending_path = None
         self.pending_capture = None
         self.last_capture_timings = None
         self.last_error = None
-        self.home_after_clear = False
+        self.return_home_after_clear = False
+        self.active_draw = None
 
         if self.connect():
-            self.initialize_position()
+            self.center()
 
         self.start()
 
-    def initialize_position(self):
-        # hit limits and go home on start or reconnect
+    def center(self):
+        # Hit both physical bounds once so the logical center is calibrated.
+        log('plotter> center')
         self.clear_queue()
         self.define_position(*home_position)
         self.go(0, 0, state=State.POSITIONED)
         self.go(*limit_position, state=State.POSITIONED)
-        self.home()
+        self.return_home(state=State.CENTERING)
 
     def connect(self):
         port = self.port or find_tinyg_port()
@@ -168,6 +169,7 @@ class Plotter(threading.Thread):
         self.pending_path = None
         self.pending_capture = None
         self.last_capture_timings = None
+        self.active_draw = None
         self.last_error = 'plotter disconnected'
 
     def clear_queue(self):
@@ -178,7 +180,7 @@ class Plotter(threading.Thread):
         return self.connected and self.state == State.HOME
 
     def can_start_draw(self):
-        return self.connected and self.state in (State.HOME, State.READY, State.POSITIONED)
+        return self.connected and self.state in (State.HOME, State.READY)
 
     def wait_for_startup(self, timeout=8):
         deadline = time.time() + timeout
@@ -226,24 +228,47 @@ class Plotter(threading.Thread):
         # https://github.com/synthetos/TinyG/wiki/Coordinate-Systems
         self.queue.put(f'g10l2p1x{-x:.4f}y{-y:.4f}\n')
 
-    def home(self):
+    def return_home(self, state=State.RETURNING_HOME):
         if self.state == State.HOME:
             # already home
-            log('plotter> already home')
+            log('plotter> already at home')
             return
-        log('plotter> home')
-        self.go(*home_position, state=State.HOMING)
+        log('plotter> return home')
+        self.go(*home_position, state=state)
 
-    def force_home(self):
-        log('plotter> force home')
-        self.pending_path = None
-        self.pending_capture = None
-        self.last_capture_timings = None
+    def manual_go(self, x, y):
+        if self.state not in (State.HOME, State.POSITIONED):
+            raise RuntimeError(f'cannot move while state is {self.state.name}')
         self.last_error = None
-        self.go(*home_position, state=State.HOMING)
+        self.go(x, y, state=State.POSITIONED)
+
+    def request_return_home(self):
+        if self.state == State.HOME:
+            self.last_error = None
+            log('plotter> already at home')
+            return
+        if self.state == State.POSITIONED:
+            self.last_error = None
+            self.return_home()
+            return
+        if self.state == State.READY:
+            self.last_error = None
+            self.pending_path = None
+            self.last_capture_timings = None
+            self.state = State.HOME
+            log('plotter> canceled pending capture and stayed home')
+            return
+        if self.state in (State.DRAWING, State.POSTDRAW):
+            self.reset_to_beginning()
+            return
+        if self.state in (State.CENTERING, State.RETURNING_HOME):
+            self.last_error = None
+            log(f'plotter> already {self.state.name.lower()}')
+            return
+        raise RuntimeError(f'cannot return home while state is {self.state.name}')
         
-    def stop(self):
-        log('plotter> stop')
+    def interrupt_motion(self):
+        log('plotter> interrupt motion')
         self.clear.set()
 
     def go(self, x, y, state=State.POSITIONED):
@@ -257,10 +282,29 @@ class Plotter(threading.Thread):
         self.queue.put((f'g0x{x:.4f}y{y:.4f}\n', 1, 'go'))
         self.state = state
 
-    def draw(self, commands):
+    def draw(self, commands, stats=None, source='draw'):
         if not self.connected:
             raise RuntimeError('plotter is disconnected')
         self.last_error = None
+        self.pending_path = None
+        self.pending_capture = None
+        self.last_capture_timings = None
+        planned_stats = (stats or {}).get('planned', {})
+        self.active_draw = {
+            'source': source,
+            'command_count': len(commands),
+            'path_length_mm': planned_stats.get('path_length_mm'),
+            'estimated_feed_time_s': planned_stats.get('estimated_feed_time_s'),
+            'queued_at': time.monotonic(),
+            'accepted_at': None,
+        }
+        log(
+            'plotter> draw queued',
+            f'source={source}',
+            f'commands={len(commands)}',
+            f'length={planned_stats.get("path_length_mm", 0):.1f}mm',
+            f'est_feed={planned_stats.get("estimated_feed_time_s", 0):.1f}s',
+        )
         for command in commands:
             self.queue.put(f'{command}\n')
         self.state = State.DRAWING
@@ -301,24 +345,25 @@ class Plotter(threading.Thread):
 
     def reset_to_beginning(self):
         log('plotter> reset to beginning')
-        self.stop()
+        self.interrupt_motion()
         self.pending_path = None
         self.pending_capture = None
         self.last_capture_timings = None
+        self.active_draw = None
         self.last_error = None
-        self.home_after_clear = True
-        self.state = State.HOMING
+        self.return_home_after_clear = True
+        self.state = State.RETURNING_HOME
             
     def join(self):
         log('plotter> sending shutdown')
         self.shutdown.set()
         super().join()
 
-    def home_after_tinyg_clear(self):
-        if not self.home_after_clear:
+    def return_home_after_tinyg_clear(self):
+        if not self.return_home_after_clear:
             return
-        self.home_after_clear = False
-        self.go(*home_position, state=State.HOMING)
+        self.return_home_after_clear = False
+        self.return_home()
 
     def tinyg_status(self, msg):
         try:
@@ -374,6 +419,51 @@ class Plotter(threading.Thread):
                 return False
         self.last_error = f'timed out waiting for TinyG idle after {label}; last stat={last_stat}'
         log('plotter>', self.last_error)
+        self.state = State.ERROR
+        return False
+
+    def finish_idle_motion(self):
+        if not self.connected or not self.queue.empty():
+            return False
+        if self.state == State.DRAWING:
+            draw = self.active_draw or {}
+            now = time.monotonic()
+            queued_at = draw.get('queued_at', now)
+            draw['accepted_at'] = now
+            self.active_draw = draw
+            log(
+                'plotter> drawing commands accepted, waiting for TinyG idle',
+                f'source={draw.get("source", "unknown")}',
+                f'commands={draw.get("command_count", 0)}',
+                f'queue_accept_s={now - queued_at:.1f}',
+                f'est_feed={draw.get("estimated_feed_time_s", 0):.1f}s',
+            )
+            if self.wait_for_tinyg_idle('draw') and self.state == State.DRAWING and self.queue.empty():
+                done_at = time.monotonic()
+                accepted_at = draw.get('accepted_at', done_at)
+                log(
+                    f'plotter> finished drawing, waiting {post_draw_home_delay_seconds}s to return home',
+                    f'source={draw.get("source", "unknown")}',
+                    f'physical_wait_s={done_at - accepted_at:.1f}',
+                    f'total_draw_s={done_at - queued_at:.1f}',
+                )
+                self.active_draw = None
+                self.state = State.POSTDRAW
+                if not self.clear.wait(post_draw_home_delay_seconds):
+                    self.return_home()
+                else:
+                    self.state = State.POSITIONED
+            return True
+        if self.state in (State.CENTERING, State.RETURNING_HOME):
+            if self.return_home_after_clear:
+                self.return_home_after_tinyg_clear()
+                return True
+            label = 'centering' if self.state == State.CENTERING else 'return home'
+            log(f'plotter> {label} command accepted, waiting for TinyG idle')
+            if self.wait_for_tinyg_idle(label) and self.state in (State.CENTERING, State.RETURNING_HOME) and self.queue.empty():
+                log(f'plotter> {label} complete')
+                self.state = State.HOME
+            return True
         return False
         
     # todo: write this part in a way that sends a bunch of commands quickly
@@ -385,15 +475,10 @@ class Plotter(threading.Thread):
         read_queue_size = 0
         response_labels = deque()
         queue_previously_empty = True
-        next_reconnect = 0
         while not self.shutdown.is_set():
             time.sleep(0.01)
             if not self.connected:
-                if time.time() >= next_reconnect:
-                    if self.connect():
-                        self.initialize_position()
-                        read_queue_size = 0
-                    next_reconnect = time.time() + reconnect_interval
+                self.shutdown.wait(1)
                 continue
             try:
                 if self.clear.is_set():
@@ -401,11 +486,35 @@ class Plotter(threading.Thread):
                     # https://github.com/synthetos/TinyG/wiki/TinyG-Feedhold-and-Resume
                     # The ! and ~ do not emit responses, but % does "{rx:254}".
                     # Resume after flushing so later jog/home commands are not left in feedhold.
-                    msg = ('!%~', 1, 'clear')
                     log(f'plotter> clearing queue')
                     self.clear_queue()
+                    read_queue_size = 0
+                    response_labels.clear()
+                    try:
+                        self.ser.reset_input_buffer()
+                    except AttributeError:
+                        pass
+                    self.ser.write(b'!')
+                    self.ser.flush()
+                    time.sleep(0.1)
+                    self.ser.write(b'%')
+                    self.ser.flush()
+                    clear_deadline = time.monotonic() + 2
+                    while time.monotonic() < clear_deadline:
+                        msg = self.ser.read_until()
+                        if not msg:
+                            continue
+                        log(f'plotter> clear response {msg!r}')
+                        if msg == b'{"rx":254}\n':
+                            break
+                    self.ser.write(b'~')
+                    self.ser.flush()
                     self.clear.clear()
+                    self.return_home_after_tinyg_clear()
+                    continue
                 else:
+                    if read_queue_size == 0 and self.finish_idle_motion():
+                        continue
                     msg = self.queue.get(timeout=1)
                     queue_previously_empty = False
                 if isinstance(msg, tuple):
@@ -449,13 +558,13 @@ class Plotter(threading.Thread):
                             if response_label:
                                 log(f'plotter> {response_label} response {msg!r}')
                             # log(f'plotter> blast response {repr(msg)}')
-                            # this message signifies that the freehold is finished
+                            # this message signifies that the feedhold is finished
                             # and there is nothing left in the read queue, but it 
                             # doesn't necessarily come when the read_queue_size is 1
                             if msg == b'{"rx":254}\n':
                                 log(f'plotter> finished at (a)', read_queue_size)
                                 read_queue_size = 0
-                                self.home_after_tinyg_clear()
+                                self.return_home_after_tinyg_clear()
                     else:
                         msg = self.ser.read_until()
                         if not msg:
@@ -471,23 +580,9 @@ class Plotter(threading.Thread):
                         if msg == b'{"rx":254}\n':
                             log(f'plotter> finished at (b)', read_queue_size)
                             read_queue_size = 0
-                            self.home_after_tinyg_clear()
-                if read_queue_size == 0 and self.queue.empty() and self.state == State.DRAWING:
-                    log('plotter> drawing commands accepted, waiting for TinyG idle')
-                    if self.wait_for_tinyg_idle('draw') and self.state == State.DRAWING and self.queue.empty():
-                        log(f'plotter> finished drawing, waiting {post_draw_home_delay_seconds}s to go home')
-                        self.state = State.POSTDRAW
-                        if not self.clear.wait(post_draw_home_delay_seconds):
-                            self.home()
-                        else:
-                            self.state = State.POSITIONED
-                elif read_queue_size == 0 and self.queue.empty() and self.state == State.HOMING:
-                    if self.home_after_clear:
-                        continue
-                    log('plotter> homing command accepted, waiting for TinyG idle')
-                    if self.wait_for_tinyg_idle('home') and self.state == State.HOMING and self.queue.empty():
-                        log('plotter> home complete')
-                        self.state = State.HOME
+                            self.return_home_after_tinyg_clear()
+                if read_queue_size == 0:
+                    self.finish_idle_motion()
             except serial.SerialTimeoutException:
                 log('plotter> timeout')
             except serial.SerialException as e:
@@ -523,7 +618,7 @@ def queue_planned_draw(
         'length', f"{stats['planned']['path_length_mm']:.1f}mm",
         'bbox', stats['planned']['bbox_mm']
     )
-    plotter.draw(planned['commands'])
+    plotter.draw(planned['commands'], stats=stats, source=source)
     return planned
 
 def draw_payload(body, source='draw'):
@@ -672,21 +767,34 @@ def index():
     response.headers['Cache-Control'] = 'no-store'
     return response
 
-@app.route('/go')
-def go():
+@app.route('/min')
+def min_position():
     if not plotter.connected:
         return {'error': 'plotter is disconnected'}, 503
-    req = flask.request
-    x = int(req.args.get('x'))
-    y = int(req.args.get('y'))
-    plotter.go(x, y)
+    try:
+        plotter.manual_go(0, 0)
+    except RuntimeError as e:
+        return {'error': str(e), 'state': plotter.state.name, 'button_light': button_light_on()}, 409
+    return '',200
+
+@app.route('/max')
+def max_position():
+    if not plotter.connected:
+        return {'error': 'plotter is disconnected'}, 503
+    try:
+        plotter.manual_go(*limit_position)
+    except RuntimeError as e:
+        return {'error': str(e), 'state': plotter.state.name, 'button_light': button_light_on()}, 409
     return '',200
 
 @app.route('/home')
 def home():
     if not plotter.connected:
         return {'error': 'plotter is disconnected'}, 503
-    plotter.force_home()
+    try:
+        plotter.request_return_home()
+    except RuntimeError as e:
+        return {'error': str(e), 'state': plotter.state.name, 'button_light': button_light_on()}, 409
     return '',200
 
 @app.route('/draw', methods=['POST'])
@@ -733,14 +841,6 @@ def draw_json():
         log('draw-json> invalid path', e)
         return {'error': str(e)}, 400
     return planned_response(planned)
-
-@app.route('/stop')
-def stop():
-    if not plotter.connected:
-        return {'error': 'plotter is disconnected'}, 503
-    plotter.stop()
-    # plotter.home()
-    return '',200
 
 @app.route('/shutter')
 def shutter():
@@ -890,13 +990,16 @@ def button():
         log('button> reset()')
         plotter.reset_to_beginning()
     elif plotter.state == State.POSITIONED:
-        log('button> home from positioned')
-        home()
+        log('button> return home from positioned')
+        plotter.request_return_home()
     elif plotter.state == State.POSTDRAW:
         log('button> ignored while post-draw delay is running')
         return {'state': plotter.state.name, 'button_light': button_light_on(), 'ignored': True}, 200
-    elif plotter.state == State.HOMING:
-        log('button> ignored while homing')
+    elif plotter.state == State.CENTERING:
+        log('button> ignored while centering')
+        return {'state': plotter.state.name, 'button_light': button_light_on(), 'ignored': True}, 200
+    elif plotter.state == State.RETURNING_HOME:
+        log('button> ignored while returning home')
         return {'state': plotter.state.name, 'button_light': button_light_on(), 'ignored': True}, 200
     return {'state': plotter.state.name, 'button_light': button_light_on()}, 200
 

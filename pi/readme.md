@@ -196,8 +196,10 @@ The plotter service searches for an FTDI device matching `FT230X`.
 Plotter:
 
 - `GET http://localhost:8080/status`
+- `GET http://localhost:8080/min`
 - `GET http://localhost:8080/home`
-- `GET http://localhost:8080/stop`
+- `GET http://localhost:8080/max`
+- `GET http://localhost:8080/button`
 - `POST http://localhost:8080/draw`
 - `POST http://localhost:8080/draw-json`
 - `GET http://localhost:8080/camera-preview.jpg`
