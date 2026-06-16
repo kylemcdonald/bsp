@@ -33,7 +33,7 @@ tinyg_motion_params = {
 reconnect_interval = 1
 post_draw_home_delay_seconds = 10
 
-State = Enum('State', 'HOME POSITIONED CAPTURING READY DRAWING POSTDRAW')
+State = Enum('State', 'HOME POSITIONED HOMING CAPTURING READY DRAWING POSTDRAW')
 
 import sys
 def log(*args):
@@ -91,6 +91,8 @@ class Plotter(threading.Thread):
         self.pending_path = None
         self.pending_capture = None
         self.last_capture_timings = None
+        self.last_error = None
+        self.home_after_clear = False
 
         if self.connect():
             self.initialize_position()
@@ -157,10 +159,17 @@ class Plotter(threading.Thread):
         self.state = State.HOME
         self.pending_path = None
         self.pending_capture = None
+        self.last_error = 'plotter disconnected'
 
     def clear_queue(self):
         with self.queue.mutex:
             self.queue.queue.clear()
+
+    def can_start_capture(self):
+        return self.connected and self.state == State.HOME
+
+    def can_start_draw(self):
+        return self.connected and self.state in (State.HOME, State.READY, State.POSITIONED)
 
     def wait_for_startup(self, timeout=8):
         deadline = time.time() + timeout
@@ -214,16 +223,15 @@ class Plotter(threading.Thread):
             log('plotter> already home')
             return
         log('plotter> home')
-        self.go(*home_position, state=State.HOME)
-        self.state = State.HOME
+        self.go(*home_position, state=State.HOMING)
 
     def force_home(self):
         log('plotter> force home')
         self.pending_path = None
         self.pending_capture = None
         self.last_capture_timings = None
-        self.go(*home_position, state=State.HOME)
-        self.state = State.HOME
+        self.last_error = None
+        self.go(*home_position, state=State.HOMING)
         
     def stop(self):
         log('plotter> stop')
@@ -243,15 +251,19 @@ class Plotter(threading.Thread):
     def draw(self, commands):
         if not self.connected:
             raise RuntimeError('plotter is disconnected')
+        self.last_error = None
         for command in commands:
             self.queue.put(f'{command}\n')
         self.state = State.DRAWING
 
     def begin_capture(self):
+        if not self.can_start_capture():
+            raise RuntimeError(f'cannot start capture while state is {self.state.name}')
         request_id = str(uuid.uuid4())
         self.pending_path = None
         self.pending_capture = request_id
         self.last_capture_timings = None
+        self.last_error = None
         self.state = State.CAPTURING
         return request_id
 
@@ -263,7 +275,20 @@ class Plotter(threading.Thread):
         self.pending_path = path_payload
         self.pending_capture = None
         self.last_capture_timings = timings
+        self.last_error = None
         self.state = State.READY
+
+    def fail_capture(self, request_id=None, error='capture failed'):
+        if self.state != State.CAPTURING:
+            raise RuntimeError(f'plotter is not waiting for capture result; current state is {self.state.name}')
+        if self.pending_capture and request_id and self.pending_capture != request_id:
+            raise RuntimeError('capture error request_id did not match active capture')
+        log('plotter> capture failed', error)
+        self.pending_path = None
+        self.pending_capture = None
+        self.last_capture_timings = None
+        self.last_error = error
+        self.state = State.HOME
 
     def reset_to_beginning(self):
         log('plotter> reset to beginning')
@@ -271,7 +296,9 @@ class Plotter(threading.Thread):
         self.pending_path = None
         self.pending_capture = None
         self.last_capture_timings = None
-        self.state = State.HOME
+        self.last_error = None
+        self.home_after_clear = True
+        self.state = State.HOMING
             
     def join(self):
         log('plotter> sending shutdown')
@@ -321,6 +348,9 @@ class Plotter(threading.Thread):
                 read_queue_size += expected_responses
                 for _ in range(expected_responses):
                     response_labels.append(response_label)
+                if response_label == 'clear' and self.home_after_clear:
+                    self.home_after_clear = False
+                    self.go(*home_position, state=State.HOMING)
             except queue.Empty:
                 if not queue_previously_empty:
                     log('plotter> queue empty')
@@ -372,10 +402,16 @@ class Plotter(threading.Thread):
                         if msg == b'{"rx":254}\n':
                             log(f'plotter> finished at (b)', read_queue_size)
                             read_queue_size = 0
-                if read_queue_size == 0 and self.state == State.DRAWING:
+                if read_queue_size == 0 and self.queue.empty() and self.state == State.DRAWING:
                     log(f'plotter> finished drawing, waiting {post_draw_home_delay_seconds}s to go home')
-                    time.sleep(post_draw_home_delay_seconds)
-                    self.home()
+                    self.state = State.POSTDRAW
+                    if not self.clear.wait(post_draw_home_delay_seconds):
+                        self.home()
+                    else:
+                        self.state = State.POSITIONED
+                elif read_queue_size == 0 and self.queue.empty() and self.state == State.HOMING:
+                    log('plotter> home complete')
+                    self.state = State.HOME
             except serial.SerialTimeoutException:
                 log('plotter> timeout')
             except serial.SerialException as e:
@@ -451,7 +487,7 @@ def count_points(path_payload):
         return None
 
 def button_light_on():
-    return plotter.state != State.CAPTURING
+    return plotter.state in (State.HOME, State.READY, State.DRAWING, State.POSITIONED)
 
 @app.route('/')
 def index():
@@ -481,6 +517,8 @@ def home():
 def draw():
     if not plotter.connected:
         return {'error': 'plotter is disconnected'}, 503
+    if not plotter.can_start_draw():
+        return {'error': f'cannot draw while state is {plotter.state.name}', 'state': plotter.state.name}, 409
     req = flask.request
     body = req.get_json(silent=True)
     try:
@@ -494,6 +532,8 @@ def draw():
 def draw_json():
     if not plotter.connected:
         return {'error': 'plotter is disconnected'}, 503
+    if not plotter.can_start_draw():
+        return {'error': f'cannot draw while state is {plotter.state.name}', 'state': plotter.state.name}, 409
     upload = flask.request.files.get('json') or flask.request.files.get('file')
     if upload is None or upload.filename == '':
         return {'error': 'missing JSON upload'}, 400
@@ -529,6 +569,8 @@ def stop():
 @app.route('/shutter')
 def shutter():
     log('shutter> pressed')
+    if not plotter.can_start_capture():
+        return {'error': f'cannot start capture while state is {plotter.state.name}', 'state': plotter.state.name, 'button_light': button_light_on()}, 409
     request_id = plotter.begin_capture()
     try:
         response = requests.get(camera_url, params={'request_id': request_id}, timeout=5)
@@ -587,6 +629,18 @@ def capture_result():
     log('capture-result> ready', point_count, 'points')
     return {'state': plotter.state.name, 'button_light': button_light_on(), 'point_count': point_count}, 200
 
+@app.route('/capture-error', methods=['POST'])
+def capture_error():
+    body = flask.request.get_json(silent=True) or {}
+    request_id = body.get('request_id')
+    error = body.get('error') or 'capture failed'
+    try:
+        plotter.fail_capture(request_id, error)
+    except RuntimeError as e:
+        log('capture-error> invalid error report', e)
+        return {'error': str(e), 'state': plotter.state.name, 'button_light': button_light_on()}, 400
+    return {'state': plotter.state.name, 'button_light': button_light_on(), 'error': plotter.last_error}, 200
+
 @app.route('/button')
 def button():
     log('button> pressed')
@@ -614,8 +668,11 @@ def button():
         log('button> home from positioned')
         home()
     elif plotter.state == State.POSTDRAW:
-        log('button> home()')
-        home()
+        log('button> ignored while post-draw delay is running')
+        return {'state': plotter.state.name, 'button_light': button_light_on(), 'ignored': True}, 200
+    elif plotter.state == State.HOMING:
+        log('button> ignored while homing')
+        return {'state': plotter.state.name, 'button_light': button_light_on(), 'ignored': True}, 200
     return {'state': plotter.state.name, 'button_light': button_light_on()}, 200
 
 @app.route('/status')	
@@ -628,6 +685,7 @@ def status():
         'pending_capture': plotter.pending_capture,
         'has_pending_path': plotter.pending_path is not None,
         'last_capture_timings': plotter.last_capture_timings,
+        'last_error': plotter.last_error,
     }
 
 serve(app, listen='*:8080')

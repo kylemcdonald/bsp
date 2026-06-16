@@ -159,6 +159,7 @@ Available settings:
 - `BSP_VIBECHECK_URL`: base URL for the full-frame vector processing API, default `http://vibecheck.taildd340.ts.net:8787`; for RunPod use its full `https://...` base URL if provided
 - `BSP_PROCESS_URL`: optional full process endpoint override, default `$BSP_VIBECHECK_URL/api/process`
 - `BSP_PLOTTER_CAPTURE_RESULT_URL`: local plotter endpoint used by the camera after processor response, default `http://localhost:8080/capture-result`
+- `BSP_PLOTTER_CAPTURE_ERROR_URL`: local plotter endpoint used by the camera when capture or processing fails, default `http://localhost:8080/capture-error`
 - `BSP_CAMERA_SHUTTER_URL`: local camera shutter endpoint used by the plotter
 - `BSP_CAMERA_PREVIEW_URL`: local camera preview endpoint used by the plotter web UI, default `http://localhost:8081/preview.jpg`
 - `BSP_CAMERA_SETTINGS_URL`: local camera settings endpoint used by the plotter web UI, default `http://localhost:8081/settings`
@@ -193,9 +194,11 @@ Plotter:
 - `POST http://localhost:8080/draw-json`
 - `GET http://localhost:8080/camera-preview.jpg`
 - `POST http://localhost:8080/capture-result`
+- `POST http://localhost:8080/capture-error`
 
 Camera:
 
+- `GET http://localhost:8081/status`
 - `GET http://localhost:8081/shutter`
 - `GET http://localhost:8081/preview.jpg`
 - `GET http://localhost:8081/settings`
@@ -205,7 +208,8 @@ Button:
 
 - short press calls `http://localhost:8080/button`; when the plotter is home this triggers a camera capture and turns the button light off, when the capture result is ready the button light turns on, the next press draws that stored result, and a press while drawing resets to the beginning state
 - while the button light is off, button presses are ignored locally by the button service
-- long press homes the plotter and shuts down the Pi
+- capture, processor, or result-post failures are reported back to the plotter, which returns to `HOME` with `last_error` set in `/status`
+- long press for more than 5 seconds homes the plotter and shuts down the Pi
 
 ## Processor Response Schema
 

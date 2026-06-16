@@ -18,12 +18,14 @@ from wait_for_format import wait_for_format
 api_base_url = (os.environ.get('BSP_VIBECHECK_URL') or 'http://vibecheck.taildd340.ts.net:8787').rstrip('/')
 process_url = os.environ.get('BSP_PROCESS_URL') or f'{api_base_url}/api/process'
 plotter_result_url = os.environ.get('BSP_PLOTTER_CAPTURE_RESULT_URL', 'http://localhost:8080/capture-result')
+plotter_error_url = os.environ.get('BSP_PLOTTER_CAPTURE_ERROR_URL', 'http://localhost:8080/capture-error')
 jpeg_quality = 50
 request_timeout = 120
 camera_device = os.environ.get('BSP_CAMERA_DEVICE', '/dev/video0')
 
 log('using process endpoint', process_url)
 log('using plotter capture result endpoint', plotter_result_url)
+log('using plotter capture error endpoint', plotter_error_url)
 
 camera_control_specs = {
     'auto_exposure': {'min': 1, 'max': 3},
@@ -131,6 +133,16 @@ def save_to_disk(data, directory, extension):
     with open(fn, 'wb') as f:
         f.write(data)
 
+def report_capture_error(request_id, error):
+    try:
+        requests.post(
+            plotter_error_url,
+            json={'request_id': request_id, 'error': error},
+            timeout=5,
+        ).raise_for_status()
+    except requests.RequestException as e:
+        log('camera> failed to report capture error', e)
+
 class Camera(threading.Thread):
     def __init__(self):
         super().__init__()
@@ -168,6 +180,7 @@ class Camera(threading.Thread):
         timings['photo_received_at'] = time.perf_counter()
         if not ret:
             log('camera> capture failed')
+            report_capture_error(request_id, 'camera capture failed')
             return
 
         log('camera> convert full frame to jpg for post')
@@ -175,6 +188,7 @@ class Camera(threading.Thread):
         timings['photo_encoded_at'] = time.perf_counter()
         if not ok:
             log('camera> jpg encode failed')
+            report_capture_error(request_id, 'camera jpg encode failed')
             return
 
         save_to_disk(encimg, 'images', '.jpg')
@@ -214,14 +228,19 @@ class Camera(threading.Thread):
             response.raise_for_status()
         except requests.exceptions.ConnectionError:
             log('camera> connection error')
+            report_capture_error(request_id, 'capture request connection error')
         except requests.exceptions.Timeout:
             log('camera> request timeout')
+            report_capture_error(request_id, 'capture request timeout')
         except requests.exceptions.HTTPError as e:
             log('camera> http error', e)
+            report_capture_error(request_id, f'capture request http error: {e}')
         except requests.exceptions.JSONDecodeError:
             log('camera> JSON response error')
+            report_capture_error(request_id, 'capture response JSON error')
         except ValueError as e:
             log('camera> invalid process response', e)
+            report_capture_error(request_id, str(e))
 
     def preview_jpeg(self):
         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
@@ -268,6 +287,10 @@ def shutter():
         'trigger_received_at': time.perf_counter(),
     })
     return {'request_id': request_id}, 202
+
+@app.route('/status')
+def status():
+    return {'ready': True}
 
 @app.route('/preview.jpg')
 def preview():
