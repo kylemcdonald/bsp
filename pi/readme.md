@@ -101,20 +101,31 @@ The pip-managed Pi dependencies are listed in `pi/requirements-pi.txt`:
 Do not use `sudo pip3 install` for this app. Keep OS/hardware packages in apt
 and app-level packages in the venv.
 
-## Shutdown Permission
+## Button Control Permissions
 
-The button service runs as the normal `ubuntu` user. Long-press shutdown is
-allowed through a narrow sudoers rule installed by `pi/install-system-deps.sh`:
+The button service runs as the normal `ubuntu` user. Long-press shutdown and
+service restart are allowed through narrow sudoers rules installed by
+`pi/install-system-deps.sh`:
 
 ```sudoers
 ubuntu ALL=(root) NOPASSWD: /usr/sbin/shutdown -h now
+ubuntu ALL=(root) NOPASSWD: /home/ubuntu/bsp/pi/button/restart-services.sh
 ```
 
-The button code calls exactly:
+The button code calls shutdown exactly:
 
 ```sh
 sudo /usr/sbin/shutdown -h now
 ```
+
+For service restart, it calls the repo helper through sudo:
+
+```sh
+sudo /home/ubuntu/bsp/pi/button/restart-services.sh
+```
+
+That helper schedules a delayed one-shot transient systemd unit. The delay is
+important because `button.service` is one of the services being restarted.
 
 This avoids running the whole button service as root.
 
@@ -164,7 +175,7 @@ Available settings:
 - `BSP_CAMERA_SHUTTER_URL`: local camera shutter endpoint used by the plotter
 - `BSP_CAMERA_PREVIEW_URL`: local camera preview endpoint used by the plotter web UI, default `http://localhost:8081/preview.jpg`
 - `BSP_CAMERA_SETTINGS_URL`: local camera settings endpoint used by the plotter web UI, default `http://localhost:8081/settings`
-- `BSP_CAMERA_DEVICE`: V4L2 camera device used for camera controls, default `/dev/video0`
+- `BSP_CAMERA_DEVICE`: optional V4L2 camera device/path used for capture and controls. If unset, the camera service prefers `/dev/v4l/by-id/*` and falls back to `/dev/video0`.
 - `BSP_TINYG_PORT`: optional TinyG serial device override, for example `/dev/ttyUSB0`
 
 Restart both `camera` and `plotter` after changing local camera/plotter URLs or
@@ -212,7 +223,7 @@ Plotter:
 
 Camera:
 
-- `GET http://localhost:8081/status`
+- `GET http://localhost:8081/status`; returns `200` only when the camera is connected and readable, and returns `503` after a runtime disconnect
 - `GET http://localhost:8081/shutter`
 - `GET http://localhost:8081/preview.jpg`
 - `GET http://localhost:8081/settings`
@@ -222,8 +233,50 @@ Button:
 
 - short press calls `http://localhost:8080/button`; when the plotter is home this triggers a camera capture and turns the button light off, when the capture result is ready the button light turns on, the next press draws that stored result, and a press while drawing resets to the beginning state
 - while the button light is off, button presses are ignored locally by the button service
-- capture and processor failures are reported in the plotter state, which returns to `HOME` with `last_error` set in `/status`; the button LED flashes at 10Hz until the next press, which starts a new capture
-- long press for more than 5 seconds homes the plotter and shuts down the Pi
+- capture and processor failures are reported in the plotter state, which returns to `HOME` with `last_error` set in `/status`
+- holding the button for 5 seconds arms a service restart; the LED switches to a fast `200ms` on, `200ms` off flash, and releasing the button after this point restarts `plotter.service`, `camera.service`, and `button.service`
+- continuing to hold the button for 10 seconds homes the plotter and shuts down the Pi
+
+## Button LED Feedback
+
+The button service owns LED feedback. Error patterns repeat until the underlying
+condition clears:
+
+- network disconnected: one `100ms` flash, then `1000ms` off
+- camera disconnected: two `100ms` flashes with `100ms` off between them, then `1000ms` off
+- plotter error: three `100ms` flashes with `100ms` off between them, then `1000ms` off
+
+The button service checks network health from the local default route and
+`eth0` carrier, then probes the configured processor endpoint from
+`plotter.service` status. A missing camera status response is treated as camera
+disconnected. A missing plotter status response or plotter `ERROR` state is
+treated as plotter error.
+
+When more than one error is present, the LED reports the first condition in this
+order: network, camera, plotter. During a normal capture, the LED blinks at
+`250ms` on, `250ms` off. During a restart-armed button hold, that is overridden
+by the fast `200ms` on, `200ms` off pattern.
+
+## Plotter State Changes
+
+The plotter service reports state through `GET /status`:
+
+- `CENTERING`: startup-only calibration that defines the current logical
+  position, moves to min, moves to max, then returns home
+- `HOME`: idle at `home_position`, ready for a capture
+- `CAPTURING`: waiting for the camera image or processor response
+- `READY`: a processed path is stored and the next button press will draw it
+- `DRAWING`: G-code is being streamed to TinyG
+- `POSTDRAW`: draw completed and the service is waiting before returning home
+- `RETURNING_HOME`: normal return to `home_position`
+- `POSITIONED`: manually moved to min or max
+- `ERROR`: plotter motion/control error; restart `plotter.service` to run
+  startup centering before continuing. If TinyG is unavailable at startup or
+  disconnects during operation, `plotter.service` keeps retrying the serial
+  connection; when TinyG comes back, it reconfigures TinyG and runs startup
+  `CENTERING` before returning to `HOME`. While idle, the plotter also polls
+  TinyG health so a lost controller is reported without waiting for the next
+  movement command.
 
 ## Processor Response Schema
 

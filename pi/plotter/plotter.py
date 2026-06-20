@@ -38,6 +38,10 @@ post_draw_home_delay_seconds = 10
 tinyg_idle_status = 3
 tinyg_idle_poll_interval_seconds = 0.25
 tinyg_idle_timeout_seconds = 120
+tinyg_reconnect_interval_seconds = 2
+tinyg_read_timeout_disconnect_count = 5
+tinyg_health_poll_interval_seconds = 1
+tinyg_health_fail_disconnect_count = 3
 request_timeout = 120
 
 State = Enum('State', 'HOME POSITIONED CENTERING RETURNING_HOME CAPTURING READY DRAWING POSTDRAW ERROR')
@@ -86,6 +90,7 @@ def clamp(x, name, min_value=None, max_value=None):
 class Plotter(threading.Thread):
     def __init__(self, port=None, baudrate=115200):
         super().__init__()
+        self.port_override = port
         self.port = port
         self.baudrate = baudrate
         self.ser = FakeSerial()
@@ -101,6 +106,10 @@ class Plotter(threading.Thread):
         self.last_error = None
         self.return_home_after_clear = False
         self.active_draw = None
+        self.next_reconnect_at = 0
+        self.read_timeout_count = 0
+        self.next_health_check_at = 0
+        self.health_fail_count = 0
 
         if self.connect():
             self.center()
@@ -117,9 +126,10 @@ class Plotter(threading.Thread):
         self.return_home(state=State.CENTERING)
 
     def connect(self):
-        port = self.port or find_tinyg_port()
+        port = self.port_override or find_tinyg_port()
         if port is None:
             log('plotter> TinyG serial port not available')
+            self.last_error = 'TinyG serial port not available'
             return False
         try:
             log('plotter> connecting to port', port)
@@ -140,19 +150,41 @@ class Plotter(threading.Thread):
             log('plotter> waiting for startup')
             startup = self.wait_for_startup()
             log('plotter> got startup:', startup)
+            if b'SYSTEM READY' not in startup:
+                raise serial.SerialException('TinyG startup banner not received')
             self.configure_tinyg()
             self.connected = True
+            self.last_error = None
+            self.read_timeout_count = 0
+            self.health_fail_count = 0
             return True
         except serial.SerialException as e:
             log('plotter> serial connection failed', e)
+            self.last_error = f'TinyG serial connection failed: {e}'
         except OSError as e:
             log('plotter> serial connection failed', e)
+            self.last_error = f'TinyG serial connection failed: {e}'
         self.connected = False
         try:
             self.ser.close()
         except Exception:
             pass
         self.ser = FakeSerial()
+        if not self.port_override:
+            self.port = None
+        return False
+
+    def reconnect(self):
+        now = time.monotonic()
+        if now < self.next_reconnect_at:
+            return False
+        self.next_reconnect_at = now + tinyg_reconnect_interval_seconds
+        if self.connect():
+            # TinyG may have reset, lost motor power, or moved while offline.
+            # Re-run startup centering before accepting captures or drawings.
+            self.center()
+            return True
+        self.state = State.ERROR
         return False
 
     def disconnect(self):
@@ -165,12 +197,34 @@ class Plotter(threading.Thread):
         except Exception:
             pass
         self.ser = FakeSerial()
-        self.state = State.HOME
+        if not self.port_override:
+            self.port = None
+        self.state = State.ERROR
         self.pending_path = None
         self.pending_capture = None
         self.last_capture_timings = None
         self.active_draw = None
         self.last_error = 'plotter disconnected'
+        self.read_timeout_count = 0
+        self.health_fail_count = 0
+
+    def check_tinyg_health(self):
+        if self.state not in (State.HOME, State.READY, State.POSITIONED):
+            return
+        now = time.monotonic()
+        if now < self.next_health_check_at:
+            return
+        self.next_health_check_at = now + tinyg_health_poll_interval_seconds
+        idle, stat = self.query_tinyg_idle(response_timeout=0.5)
+        if stat is not None:
+            self.health_fail_count = 0
+            return
+        self.health_fail_count += 1
+        log('plotter> TinyG health check failed', f'count={self.health_fail_count}')
+        if self.health_fail_count >= tinyg_health_fail_disconnect_count:
+            log('plotter> TinyG health check failed repeatedly; reconnecting TinyG')
+            self.disconnect()
+            self.next_reconnect_at = 0
 
     def clear_queue(self):
         with self.queue.mutex:
@@ -478,7 +532,8 @@ class Plotter(threading.Thread):
         while not self.shutdown.is_set():
             time.sleep(0.01)
             if not self.connected:
-                self.shutdown.wait(1)
+                self.reconnect()
+                self.shutdown.wait(0.25)
                 continue
             try:
                 if self.clear.is_set():
@@ -569,9 +624,15 @@ class Plotter(threading.Thread):
                         msg = self.ser.read_until()
                         if not msg:
                             log('plotter> read timeout')
+                            self.read_timeout_count += 1
                             read_queue_size = 0
                             response_labels.clear()
+                            if not self.queue.empty() and self.read_timeout_count >= tinyg_read_timeout_disconnect_count:
+                                log('plotter> too many read timeouts while streaming; reconnecting TinyG')
+                                self.disconnect()
+                                self.next_reconnect_at = 0
                             continue
+                        self.read_timeout_count = 0
                         read_queue_size -= 1
                         response_label = response_labels.popleft() if response_labels else None
                         if response_label:
@@ -583,6 +644,8 @@ class Plotter(threading.Thread):
                             self.return_home_after_tinyg_clear()
                 if read_queue_size == 0:
                     self.finish_idle_motion()
+                    if self.connected and self.queue.empty() and read_queue_size == 0:
+                        self.check_tinyg_health()
             except serial.SerialTimeoutException:
                 log('plotter> timeout')
             except serial.SerialException as e:

@@ -1,8 +1,12 @@
 #!/usr/bin/python3
-import time
 import datetime
-from gpiozero import InputDevice, LED
+import os
+import socket
 import subprocess
+import time
+from urllib.parse import urlparse
+
+from gpiozero import InputDevice, LED
 import requests
 
 # RPI enumeration is:
@@ -23,14 +27,27 @@ plotter_ready = False
 camera_ready = False
 last_status_poll = 0
 last_camera_poll = 0
-last_flash_toggle = 0
-flash_on = False
+last_network_poll = 0
+network_ready = False
+processor_endpoint = None
+led_pattern_name = None
+led_pattern_started = 0
+restart_ready_logged = False
+restart_requested = False
 button_url = 'http://localhost:8080/button'
 status_url = 'http://localhost:8080/status'
 camera_status_url = 'http://localhost:8081/status'
-flash_interval = 0.25
-error_flash_interval = 0.05
-shutdown_hold_seconds = 5
+network_probe_timeout = 0.5
+restart_hold_seconds = 5
+shutdown_hold_seconds = 10
+
+PATTERNS = {
+    'capturing': {'pulses': None, 'on': 0.25, 'off': 0.25, 'pause': 0},
+    'network_error': {'pulses': 1, 'on': 0.1, 'off': 0.1, 'pause': 1.0},
+    'camera_error': {'pulses': 2, 'on': 0.1, 'off': 0.1, 'pause': 1.0},
+    'plotter_error': {'pulses': 3, 'on': 0.1, 'off': 0.1, 'pause': 1.0},
+    'restart_ready': {'pulses': None, 'on': 0.2, 'off': 0.2, 'pause': 0},
+}
 
 led = LED(led_pin)
 led.off()
@@ -53,34 +70,109 @@ def get(url):
     get_json(url)
 
 def apply_status(payload):
-    global button_light_enabled, plotter_last_error, plotter_ready, plotter_state
+    global button_light_enabled, plotter_last_error, plotter_ready, plotter_state, processor_endpoint
     if not isinstance(payload, dict):
         plotter_ready = False
         return
     plotter_state = payload.get('state', plotter_state)
     plotter_last_error = payload.get('last_error', plotter_last_error)
     plotter_ready = bool(payload.get('connected', plotter_ready))
+    processor_endpoint = payload.get('processor_endpoint', processor_endpoint)
     button_light_enabled = bool(payload.get('button_light', True))
 
 def services_ready():
-    return plotter_ready and camera_ready
+    return network_ready and plotter_ready and camera_ready
+
+def has_default_route():
+    try:
+        with open('/proc/net/route') as f:
+            for line in f.readlines()[1:]:
+                fields = line.split()
+                if len(fields) >= 4 and fields[1] == '00000000' and int(fields[3], 16) & 0x2:
+                    return True
+    except OSError:
+        return False
+    return False
+
+def carrier_up(interface='eth0'):
+    carrier_path = f'/sys/class/net/{interface}/carrier'
+    if not os.path.exists(carrier_path):
+        return None
+    try:
+        with open(carrier_path) as f:
+            return f.read().strip() == '1'
+    except OSError:
+        return None
+
+def processor_reachable():
+    if not processor_endpoint:
+        return True
+    parsed = urlparse(processor_endpoint)
+    if parsed.scheme not in ('http', 'https') or not parsed.hostname:
+        return True
+    port = parsed.port or (443 if parsed.scheme == 'https' else 80)
+    try:
+        with socket.create_connection((parsed.hostname, port), timeout=network_probe_timeout):
+            return True
+    except OSError:
+        return False
+
+def check_network():
+    eth_carrier = carrier_up()
+    if eth_carrier is False:
+        return False
+    if not has_default_route():
+        return False
+    return processor_reachable()
+
+def current_error_pattern():
+    if not network_ready:
+        return 'network_error'
+    if not camera_ready:
+        return 'camera_error'
+    if not plotter_ready or plotter_state == 'ERROR':
+        return 'plotter_error'
+    return None
+
+def led_pattern_on(pattern, elapsed):
+    pulses = pattern['pulses']
+    on_duration = pattern['on']
+    off_duration = pattern['off']
+    if pulses is None:
+        cycle = on_duration + off_duration
+        return elapsed % cycle < on_duration
+    active_duration = pulses * on_duration + (pulses - 1) * off_duration
+    cycle = active_duration + pattern['pause']
+    pos = elapsed % cycle
+    if pos >= active_duration:
+        return False
+    pulse_span = on_duration + off_duration
+    return pos % pulse_span < on_duration
 
 def update_led(now):
-    global last_flash_toggle, flash_on
+    global led_pattern_name, led_pattern_started
     if shutdown_requested:
         return
 
-    if not services_ready() or plotter_state == 'CAPTURING' or plotter_last_error:
-        interval = error_flash_interval if services_ready() and plotter_last_error else flash_interval
-        if now - last_flash_toggle >= interval:
-            last_flash_toggle = now
-            flash_on = not flash_on
-            if flash_on:
-                led.on()
-            else:
-                led.off()
+    if last_press is not None and button.is_active:
+        held_seconds = (datetime.datetime.now() - last_press).total_seconds()
+        pattern_name = 'restart_ready' if held_seconds >= restart_hold_seconds else None
+    else:
+        pattern_name = current_error_pattern()
+        if pattern_name is None and plotter_state == 'CAPTURING':
+            pattern_name = 'capturing'
+
+    if pattern_name is not None:
+        if pattern_name != led_pattern_name:
+            led_pattern_name = pattern_name
+            led_pattern_started = now
+        if led_pattern_on(PATTERNS[pattern_name], now - led_pattern_started):
+            led.on()
+        else:
+            led.off()
         return
 
+    led_pattern_name = None
     if button_light_enabled:
         led.on()
     else:
@@ -100,20 +192,49 @@ def poll_camera(now):
     last_camera_poll = now
     camera_ready = get_json(camera_status_url, timeout=0.5, log_errors=False) is not None
 
+def poll_network(now):
+    global network_ready, last_network_poll
+    if now - last_network_poll < 1:
+        return
+    last_network_poll = now
+    network_ready = check_network()
+
+def schedule_service_restart():
+    global restart_requested
+    if restart_requested:
+        return
+    restart_requested = True
+    print('button> scheduling service restart', flush=True)
+    try:
+        subprocess.Popen([
+            'sudo',
+            '/home/ubuntu/bsp/pi/button/restart-services.sh',
+        ], shell=False)
+    except OSError as e:
+        restart_requested = False
+        print('button> failed to schedule service restart', e, flush=True)
+
 def button_hold(now, seconds):
-    global shutdown_requested
-    if seconds > shutdown_hold_seconds and not shutdown_requested:
+    global shutdown_requested, restart_ready_logged
+    if seconds >= restart_hold_seconds and not restart_ready_logged:
+        restart_ready_logged = True
+        print('button> restart armed; release before 10s to restart services', flush=True)
+    if seconds >= shutdown_hold_seconds and not shutdown_requested:
         shutdown_requested = True
-        print('button hold')
-        led.blink(.05, .5)
+        print('button> shutdown hold', flush=True)
+        led.blink(0.05, 0.5)
         get('http://localhost:8080/home')
         time.sleep(2)
         subprocess.call(['sudo', '/usr/sbin/shutdown', '-h', 'now'], shell=False)
     
 def button_release(now, seconds):
-    global last_flash_toggle, flash_on, plotter_last_error
+    global led_pattern_name, led_pattern_started, plotter_last_error, restart_ready_logged
     if shutdown_requested:
         return
+    if seconds >= restart_hold_seconds:
+        schedule_service_restart()
+        return
+    restart_ready_logged = False
     if not services_ready():
         print('button release ignored while services are not ready')
         return
@@ -123,8 +244,8 @@ def button_release(now, seconds):
     print('button release')
     if plotter_state == 'HOME':
         apply_status({'button_light': False, 'last_error': None, 'state': 'CAPTURING'})
-        last_flash_toggle = time.monotonic()
-        flash_on = True
+        led_pattern_name = 'capturing'
+        led_pattern_started = time.monotonic()
         led.on()
     payload = get_json(button_url)
     if payload is None:
@@ -137,10 +258,12 @@ while True:
     current_time = time.monotonic()
     poll_status(current_time)
     poll_camera(current_time)
+    poll_network(current_time)
     update_led(current_time)
     now = datetime.datetime.now()
     if cur_active and not last_active:
         last_press = now
+        restart_ready_logged = False
     if cur_active: 
         duration = now - last_press
         button_hold(now, duration.total_seconds())

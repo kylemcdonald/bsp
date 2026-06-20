@@ -36,6 +36,7 @@ sudo udevadm trigger || true
 sudo install -d -m 0755 /etc/sudoers.d
 sudo tee /etc/sudoers.d/bsp-shutdown >/dev/null <<EOF
 $APP_USER ALL=(root) NOPASSWD: /usr/sbin/shutdown -h now
+$APP_USER ALL=(root) NOPASSWD: $REPO_DIR/pi/button/restart-services.sh
 EOF
 sudo chmod 0440 /etc/sudoers.d/bsp-shutdown
 sudo visudo -cf /etc/sudoers.d/bsp-shutdown
