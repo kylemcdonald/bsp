@@ -246,8 +246,8 @@ condition clears:
 - camera disconnected: two `100ms` flashes with `100ms` off between them, then `1000ms` off
 - plotter error: three `100ms` flashes with `100ms` off between them, then `1000ms` off
 
-The button service checks network health from the local default route and
-`eth0` carrier, then probes the configured processor endpoint from
+The button service checks for a local default route, whether it is provided by
+Ethernet or Wi-Fi, then probes the configured processor endpoint from
 `plotter.service` status. A missing camera status response is treated as camera
 disconnected. A missing plotter status response or plotter `ERROR` state is
 treated as plotter error.

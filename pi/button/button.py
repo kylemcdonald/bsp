@@ -1,6 +1,5 @@
 #!/usr/bin/python3
 import datetime
-import os
 import socket
 import subprocess
 import time
@@ -94,16 +93,6 @@ def has_default_route():
         return False
     return False
 
-def carrier_up(interface='eth0'):
-    carrier_path = f'/sys/class/net/{interface}/carrier'
-    if not os.path.exists(carrier_path):
-        return None
-    try:
-        with open(carrier_path) as f:
-            return f.read().strip() == '1'
-    except OSError:
-        return None
-
 def processor_reachable():
     if not processor_endpoint:
         return True
@@ -118,9 +107,6 @@ def processor_reachable():
         return False
 
 def check_network():
-    eth_carrier = carrier_up()
-    if eth_carrier is False:
-        return False
     if not has_default_route():
         return False
     return processor_reachable()
