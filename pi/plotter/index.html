@@ -53,7 +53,8 @@
     }
 
     button,
-    input::file-selector-button {
+    input::file-selector-button,
+    .button-link {
       min-height: 44px;
       border: 1px solid #222;
       border-radius: 6px;
@@ -65,8 +66,16 @@
       padding: 10px 12px;
     }
 
+    .button-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+    }
+
     button:active,
-    input::file-selector-button:active {
+    input::file-selector-button:active,
+    .button-link:active {
       transform: translateY(1px);
     }
 
@@ -127,6 +136,88 @@
 	      font: inherit;
 	      padding: 10px 12px;
 	    }
+
+    input[readonly] {
+      background: #ecece7;
+      color: #444;
+    }
+
+    fieldset {
+      margin: 0;
+      padding: 12px;
+      border: 1px solid #c8c8c0;
+      border-radius: 6px;
+    }
+
+    legend {
+      padding: 0 6px;
+      font-weight: 700;
+    }
+
+    .runpod-summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      align-items: center;
+    }
+
+    .status-pill {
+      display: inline-block;
+      min-width: 82px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: #ddd;
+      font-size: 13px;
+      font-weight: 750;
+      text-align: center;
+      text-transform: uppercase;
+    }
+
+    .status-pill.running {
+      background: #ccebd2;
+      color: #155c25;
+    }
+
+    .status-pill.starting,
+    .status-pill.stopping {
+      background: #ffe8ac;
+      color: #704f00;
+    }
+
+    .status-pill.error,
+    .status-pill.blocked {
+      background: #ffd0cc;
+      color: #7d1810;
+    }
+
+    .option-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 7px 14px;
+    }
+
+    .option-item {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      font-weight: 500;
+    }
+
+    .option-item input {
+      flex: 0 0 auto;
+      width: 20px;
+      height: 20px;
+      margin-top: 1px;
+    }
+
+    .runpod-details {
+      padding: 9px 11px;
+      border-radius: 6px;
+      background: #ecece7;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+      white-space: pre-wrap;
+    }
 
     input[type="range"] {
       width: 100%;
@@ -223,6 +314,8 @@
     const dim = 400;
     let previewPath = [];
     let pendingPathPreviewed = false;
+    let runpodConfigDirty = false;
+    let runpodOptionSignature = "";
 
     function setText(id, text) {
       document.getElementById(id).innerText = text;
@@ -252,6 +345,9 @@
       getJson("/status")
         .then((status) => {
           setText("status", JSON.stringify(status, null, 2));
+          if (status.runpod) {
+            renderRunpodSummary(status.runpod);
+          }
           maybePreviewReadyPath(status);
         })
         .catch((error) => {
@@ -389,45 +485,185 @@
 	        .catch(() => {});
 	    }
 
-	    function loadProcessorEndpoint() {
-	      setText("processor-endpoint-status", "Loading...");
-	      getJson("/processor-endpoint")
-	        .then((body) => {
-	          document.getElementById("processor-endpoint-url").value = body.url || "";
-	          setText("processor-endpoint-status", "Loaded.");
-	        })
-	        .catch((error) => {
-	          setText("processor-endpoint-status", `Load failed: ${error.message}`);
-	        });
-	    }
+    function renderRunpodSummary(runpod) {
+      const status = runpod.status || "error";
+      const pill = document.getElementById("runpod-status-pill");
+      pill.innerText = status;
+      pill.className = `status-pill ${status}`;
+      setText("runpod-status-message", runpod.message || "");
+      const endpoint = runpod.endpoint || "";
+      document.getElementById("processor-endpoint-url").value = endpoint;
+      const openLink = document.getElementById("processor-endpoint-open");
+      openLink.href = endpoint ? endpoint.replace(/\/api\/process$/, "/") : "#";
+      openLink.style.pointerEvents = endpoint ? "auto" : "none";
+      openLink.style.opacity = endpoint ? "1" : "0.45";
+      const detailLines = [];
+      if (runpod.pod_id) detailLines.push(`Pod: ${runpod.pod_id}`);
+      if (runpod.gpu_name || runpod.gpu_id) detailLines.push(`Card: ${runpod.gpu_name || runpod.gpu_id}`);
+      if (runpod.data_center_id) detailLines.push(`Region: ${runpod.data_center_id}`);
+      if (Number.isFinite(runpod.cost_per_hour)) detailLines.push(`Rate: $${Number(runpod.cost_per_hour).toFixed(2)}/hr`);
+      if (runpod.phase) detailLines.push(`Phase: ${runpod.phase}`);
+      setText("runpod-details", detailLines.length ? detailLines.join("\n") : "No managed pod yet.");
+      document.getElementById("runpod-start").disabled = status === "running";
+      document.getElementById("runpod-stop").disabled = status === "stopped" && !runpod.desired_running;
+    }
 
-	    function applyProcessorEndpoint() {
-	      const url = document.getElementById("processor-endpoint-url").value.trim();
-	      setText("processor-endpoint-status", "Applying...");
-	      fetch("/processor-endpoint", {
-	        method: "POST",
-	        headers: {
-	          "Content-Type": "application/json",
-	        },
-	        body: JSON.stringify({ url }),
-	      })
-	        .then(async (response) => {
-	          const body = await response.json().catch(() => ({}));
-	          if (!response.ok) {
-	            throw new Error(body.error || response.statusText);
-	          }
-	          return body;
-	        })
-	        .then((body) => {
-	          document.getElementById("processor-endpoint-url").value = body.url || url;
-	          setText("processor-endpoint-status", "Applied.");
-	          checkStatus();
-	        })
-	        .catch((error) => {
-	          setText("processor-endpoint-status", `Apply failed: ${error.message}`);
-	          checkStatus();
-	        });
-	    }
+    function selectedRunpodValues(name) {
+      return Array.from(document.querySelectorAll(`input[name="${name}"]:checked`)).map((input) => input.value);
+    }
+
+    function addRunpodOption(container, name, value, label, checked) {
+      const row = document.createElement("label");
+      row.className = "option-item";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.name = name;
+      checkbox.value = value;
+      checkbox.checked = checked;
+      checkbox.addEventListener("change", () => {
+        runpodConfigDirty = true;
+        setText("runpod-config-status", "Unsaved selection changes.");
+      });
+      const text = document.createElement("span");
+      text.innerText = label;
+      row.append(checkbox, text);
+      container.append(row);
+    }
+
+    function renderRunpodOptions(runpod) {
+      const gpuOptions = Array.isArray(runpod.gpu_options) ? runpod.gpu_options : [];
+      const regionOptions = Array.isArray(runpod.data_center_options) ? runpod.data_center_options : [];
+      const configuredRegions = new Set((runpod.config && runpod.config.allowed_data_center_ids) || []);
+      const signature = JSON.stringify([
+        gpuOptions.map((option) => [
+          option.id,
+          option.memory_gb,
+          option.secure_price_per_hour,
+          option.data_center_availability,
+        ]),
+        regionOptions.map((option) => option.id),
+        Array.from(configuredRegions),
+      ]);
+      if (signature !== runpodOptionSignature) {
+        const selectedGpus = runpodConfigDirty
+          ? new Set(selectedRunpodValues("runpod-gpu"))
+          : new Set((runpod.config && runpod.config.allowed_gpu_ids) || []);
+        const selectedRegions = runpodConfigDirty
+          ? new Set(selectedRunpodValues("runpod-region"))
+          : new Set((runpod.config && runpod.config.allowed_data_center_ids) || []);
+        const gpuContainer = document.getElementById("runpod-card-options");
+        const regionContainer = document.getElementById("runpod-region-options");
+        gpuContainer.replaceChildren();
+        regionContainer.replaceChildren();
+        gpuOptions.forEach((option) => {
+          const details = [];
+          if (Number.isFinite(option.memory_gb)) details.push(`${option.memory_gb} GB`);
+          if (Number.isFinite(option.secure_price_per_hour)) details.push(`$${Number(option.secure_price_per_hour).toFixed(2)}/hr`);
+          const availability = option.data_center_availability || {};
+          const stockedRegions = Object.entries(availability).filter(([region, stock]) => (
+            configuredRegions.has(region)
+            && stock
+            && !["none", "unavailable", "sold out"].includes(String(stock).toLowerCase())
+          )).length;
+          details.push(stockedRegions
+            ? `${stockedRegions} allowed region${stockedRegions === 1 ? "" : "s"} in stock`
+            : "no allowed region currently in stock");
+          addRunpodOption(
+            gpuContainer,
+            "runpod-gpu",
+            option.id,
+            `${option.name || option.id} — ${details.join(", ")}`,
+            selectedGpus.has(option.id),
+          );
+        });
+        regionOptions.forEach((option) => {
+          const suffix = option.id === "US-CA-2" ? " — preferred" : "";
+          addRunpodOption(
+            regionContainer,
+            "runpod-region",
+            option.id,
+            `${option.id} (${option.location || "North America"})${suffix}`,
+            selectedRegions.has(option.id),
+          );
+        });
+        runpodOptionSignature = signature;
+      }
+      if (!runpodConfigDirty && runpod.config) {
+        const selectedGpus = new Set(runpod.config.allowed_gpu_ids || []);
+        const selectedRegions = new Set(runpod.config.allowed_data_center_ids || []);
+        document.querySelectorAll('input[name="runpod-gpu"]').forEach((input) => {
+          input.checked = selectedGpus.has(input.value);
+        });
+        document.querySelectorAll('input[name="runpod-region"]').forEach((input) => {
+          input.checked = selectedRegions.has(input.value);
+        });
+      }
+    }
+
+    function loadRunpodStatus() {
+      getJson("/runpod/status")
+        .then((runpod) => {
+          renderRunpodSummary(runpod);
+          renderRunpodOptions(runpod);
+        })
+        .catch((error) => {
+          renderRunpodSummary({
+            status: "error",
+            phase: "manager_unavailable",
+            message: error.message,
+            desired_running: null,
+          });
+        });
+    }
+
+    function runRunpodAction(action) {
+      setText("runpod-action-status", `${action === "start" ? "Start" : "Stop"} requested...`);
+      fetch(`/runpod/${action}`, { method: "POST" })
+        .then(async (response) => {
+          const body = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(body.error || response.statusText);
+          return body;
+        })
+        .then((runpod) => {
+          renderRunpodSummary(runpod);
+          setText("runpod-action-status", `${action === "start" ? "Start" : "Stop"} accepted.`);
+          window.setTimeout(loadRunpodStatus, 500);
+        })
+        .catch((error) => {
+          setText("runpod-action-status", `Action failed: ${error.message}`);
+          loadRunpodStatus();
+        });
+    }
+
+    function saveRunpodConfig() {
+      const payload = {
+        allowed_gpu_ids: selectedRunpodValues("runpod-gpu"),
+        allowed_data_center_ids: selectedRunpodValues("runpod-region"),
+      };
+      setText("runpod-config-status", "Saving...");
+      fetch("/runpod/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+        .then(async (response) => {
+          const body = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(body.error || response.statusText);
+          return body;
+        })
+        .then((runpod) => {
+          runpodConfigDirty = false;
+          renderRunpodSummary(runpod);
+          renderRunpodOptions(runpod);
+          const suffix = runpod.configuration_applies_on_next_creation
+            ? " The running/stopped pod will be replaced on the next start."
+            : "";
+          setText("runpod-config-status", `Saved.${suffix}`);
+        })
+        .catch((error) => {
+          setText("runpod-config-status", `Save failed: ${error.message}`);
+        });
+    }
 
     function pointsFromJson(payload) {
       while (payload && typeof payload === "object" && !Array.isArray(payload)) {
@@ -619,9 +855,10 @@
 
 	    window.addEventListener("load", () => {
 	      checkStatus();
-	      loadProcessorEndpoint();
+	      loadRunpodStatus();
 	      loadCameraSettings();
 	      setInterval(checkStatus, 1000);
+	      setInterval(loadRunpodStatus, 3000);
 	    });
   </script>
 </head>
@@ -677,15 +914,37 @@
 	    </section>
 
 	    <section>
-	      <h2>Processor Endpoint</h2>
-	      <div class="control-panel">
-	        <div class="endpoint-row">
-	          <label for="processor-endpoint-url">URL</label>
-	          <input id="processor-endpoint-url" type="url" autocomplete="off" spellcheck="false" />
-	          <button class="primary" onclick="applyProcessorEndpoint()">Apply</button>
-	        </div>
-	      </div>
-	      <div class="status-text" id="processor-endpoint-status"></div>
+	      <h2>RunPod Processor</h2>
+        <div class="control-panel">
+          <div class="runpod-summary">
+            <span class="status-pill" id="runpod-status-pill">loading</span>
+            <span id="runpod-status-message">Loading RunPod status...</span>
+          </div>
+          <div class="endpoint-row">
+            <label for="processor-endpoint-url">Processor Endpoint</label>
+            <input id="processor-endpoint-url" type="url" readonly autocomplete="off" spellcheck="false" />
+            <a class="button-link" id="processor-endpoint-open" href="#" target="_blank" rel="noopener">Open</a>
+          </div>
+          <div class="runpod-details" id="runpod-details">No managed pod yet.</div>
+          <div class="actions">
+            <button class="primary" id="runpod-start" onclick="runRunpodAction('start')">Start</button>
+            <button id="runpod-stop" onclick="runRunpodAction('stop')">Stop</button>
+            <button onclick="loadRunpodStatus()">Refresh</button>
+          </div>
+          <div class="status-text" id="runpod-action-status"></div>
+          <fieldset>
+            <legend>Allowed cards</legend>
+            <div class="option-grid" id="runpod-card-options"></div>
+          </fieldset>
+          <fieldset>
+            <legend>Allowed North American regions</legend>
+            <div class="option-grid" id="runpod-region-options"></div>
+          </fieldset>
+          <div class="actions">
+            <button class="primary" onclick="saveRunpodConfig()">Save allowed cards and regions</button>
+          </div>
+          <div class="status-text" id="runpod-config-status">US-CA-2 is attempted first when selected.</div>
+        </div>
 	    </section>
 
 	    <section>

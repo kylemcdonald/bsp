@@ -24,9 +24,13 @@ limit_position = (100, 100)
 camera_url = os.environ.get('BSP_CAMERA_SHUTTER_URL', 'http://localhost:8081/shutter')
 camera_preview_url = os.environ.get('BSP_CAMERA_PREVIEW_URL', 'http://localhost:8081/preview.jpg')
 camera_settings_url = os.environ.get('BSP_CAMERA_SETTINGS_URL', 'http://localhost:8081/settings')
+runpod_manager_url = os.environ.get('BSP_RUNPOD_MANAGER_URL', 'http://127.0.0.1:8082').rstrip('/')
 api_base_url = (os.environ.get('BSP_VIBECHECK_URL') or 'http://vibecheck.taildd340.ts.net:8787').rstrip('/')
 process_url = os.environ.get('BSP_PROCESS_URL') or f'{api_base_url}/api/process'
 process_url_lock = threading.Lock()
+runpod_status_lock = threading.Lock()
+runpod_status_cache = None
+runpod_status_cache_at = 0.0
 tinyg_port = os.environ.get('BSP_TINYG_PORT')
 tinyg_motion_params = {
     'xjm': 2000,
@@ -746,9 +750,79 @@ def set_process_url(next_url):
     if not parsed.path or parsed.path == '/':
         next_url = next_url.rstrip('/') + '/api/process'
     with process_url_lock:
+        changed = process_url != next_url
         process_url = next_url
-    log('processor-endpoint> set', process_url)
+    if changed:
+        log('processor-endpoint> set', process_url)
     return process_url
+
+def refresh_runpod_status(force=False):
+    global runpod_status_cache, runpod_status_cache_at
+    now = time.monotonic()
+    with runpod_status_lock:
+        if not force and runpod_status_cache is not None and now - runpod_status_cache_at < 0.75:
+            return runpod_status_cache
+    try:
+        response = requests.get(f'{runpod_manager_url}/status', timeout=2)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError('RunPod manager status must be a JSON object')
+    except (requests.RequestException, ValueError) as e:
+        payload = {
+            'status': 'error',
+            'phase': 'manager_unavailable',
+            'message': f'RunPod manager unavailable: {e}',
+            'last_error': str(e),
+            'desired_running': None,
+            'endpoint': None,
+        }
+    endpoint = payload.get('endpoint')
+    if endpoint:
+        try:
+            set_process_url(endpoint)
+        except ValueError as e:
+            payload = dict(payload)
+            payload.update({
+                'status': 'error',
+                'phase': 'invalid_endpoint',
+                'message': f'RunPod manager returned an invalid endpoint: {e}',
+                'last_error': str(e),
+            })
+    with runpod_status_lock:
+        runpod_status_cache = payload
+        runpod_status_cache_at = now
+    return payload
+
+def runpod_status_summary(payload):
+    keys = (
+        'status', 'phase', 'message', 'last_error', 'desired_running',
+        'pod_id', 'pod_name', 'endpoint', 'gpu_id', 'gpu_name',
+        'data_center_id', 'cost_per_hour', 'runtime_status', 'updated_at',
+    )
+    return {key: payload.get(key) for key in keys if key in payload}
+
+def runpod_manager_request(method, path, payload=None):
+    global runpod_status_cache_at
+    try:
+        response = requests.request(
+            method,
+            f'{runpod_manager_url}{path}',
+            json=payload,
+            timeout=10,
+        )
+        body = response.json()
+    except requests.RequestException as e:
+        return {'error': f'RunPod manager request failed: {e}'}, 502
+    except ValueError as e:
+        return {'error': f'RunPod manager returned invalid JSON: {e}'}, 502
+    with runpod_status_lock:
+        runpod_status_cache_at = 0.0
+    if response.status_code >= 400:
+        return body, response.status_code
+    if isinstance(body, dict) and body.get('endpoint'):
+        set_process_url(body['endpoint'])
+    return body, response.status_code
 
 def process_uploaded_capture(upload, request_id, source='photo-upload', initial_timings=None):
     timings = {
@@ -760,6 +834,11 @@ def process_uploaded_capture(upload, request_id, source='photo-upload', initial_
     filename = upload.filename or 'upload.jpg'
     mimetype = upload.mimetype or 'application/octet-stream'
     try:
+        runpod_status = refresh_runpod_status(force=True)
+        if runpod_status.get('status') != 'running':
+            state = runpod_status.get('status') or 'unknown'
+            message = runpod_status.get('message') or f'RunPod processor is {state}'
+            raise RuntimeError(f'RunPod processor is {state}: {message}')
         log(f'{source}> post image to process api')
         timings['server_request_started_at'] = time.perf_counter()
         response = requests.post(
@@ -962,7 +1041,32 @@ def processor_endpoint():
             log('processor-endpoint> invalid url', e)
             return {'error': str(e), 'url': get_process_url()}, 400
         return {'url': endpoint}, 200
-    return {'url': get_process_url()}, 200
+    runpod_status = refresh_runpod_status(force=True)
+    return {
+        'url': get_process_url(),
+        'managed': True,
+        'runpod_status': runpod_status_summary(runpod_status),
+    }, 200
+
+@app.route('/runpod/status')
+def runpod_status():
+    return runpod_manager_request('GET', '/status')
+
+@app.route('/runpod/start', methods=['POST'])
+def runpod_start():
+    return runpod_manager_request('POST', '/start')
+
+@app.route('/runpod/stop', methods=['POST'])
+def runpod_stop():
+    return runpod_manager_request('POST', '/stop')
+
+@app.route('/runpod/config', methods=['POST'])
+def runpod_config():
+    return runpod_manager_request(
+        'POST',
+        '/config',
+        flask.request.get_json(silent=True) or {},
+    )
 
 @app.route('/photo-upload', methods=['POST'])
 def photo_upload():
@@ -1074,6 +1178,7 @@ def pending_path():
 
 @app.route('/status')	
 def status():
+    runpod = refresh_runpod_status()
     return {
         'state': plotter.state.name,
         'connected': plotter.connected,
@@ -1084,6 +1189,7 @@ def status():
         'last_capture_timings': plotter.last_capture_timings,
         'last_error': plotter.last_error,
         'processor_endpoint': get_process_url(),
+        'runpod': runpod_status_summary(runpod),
     }
 
 serve(app, listen='*:8080')

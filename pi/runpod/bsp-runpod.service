@@ -1,0 +1,21 @@
+[Unit]
+Description=BSP RunPod Processor Lifecycle Manager
+Wants=network-online.target
+After=network-online.target
+Before=plotter.service camera.service button.service
+
+[Service]
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/bsp/pi/runpod
+EnvironmentFile=-/etc/bsp.env
+StateDirectory=bsp-runpod
+StateDirectoryMode=0750
+ExecStart=/home/ubuntu/bsp/.venv/bin/python /home/ubuntu/bsp/pi/runpod/runpod_manager.py serve
+ExecStop=/home/ubuntu/bsp/.venv/bin/python /home/ubuntu/bsp/pi/runpod/runpod_manager.py shutdown --timeout 90
+TimeoutStopSec=105
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
