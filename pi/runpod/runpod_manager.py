@@ -179,6 +179,16 @@ def pod_runtime_status(payload):
     return "unknown"
 
 
+def pod_uptime_seconds(payload):
+    if not isinstance(payload, dict):
+        return None
+    try:
+        value = float(payload.get("uptimeSeconds"))
+    except (TypeError, ValueError):
+        return None
+    return round(max(0.0, value), 1)
+
+
 class RunpodCLIError(RuntimeError):
     def __init__(self, message, stderr="", returncode=None):
         super().__init__(message)
@@ -210,6 +220,7 @@ class RunpodManager:
         self.next_retry_at = 0.0
         self.start_request_at = 0.0
         self.stop_request_at = 0.0
+        self.startup_started_monotonic = None
         self.gpu_options = copy.deepcopy(DEFAULT_GPU_OPTIONS)
         self.data_center_options = copy.deepcopy(DEFAULT_DATA_CENTER_OPTIONS)
 
@@ -241,6 +252,7 @@ class RunpodManager:
         self.state.setdefault("data_center_id", None)
         self.state.setdefault("cost_per_hour", None)
         self.state.setdefault("runtime_status", "unknown")
+        self.state.setdefault("machine_uptime_seconds", None)
         self.state.setdefault("status", "stopped")
         self.state.setdefault("phase", "idle")
         self.state.setdefault("message", "RunPod processor is stopped")
@@ -252,6 +264,7 @@ class RunpodManager:
         self.state.setdefault("last_event", None)
         self.state.setdefault("boot_id", self._boot_id())
         if self.autostart:
+            self.startup_started_monotonic = time.monotonic()
             startup_started_at = utc_now()
             self.state["desired_running"] = True
             self.state["status"] = "starting"
@@ -261,6 +274,7 @@ class RunpodManager:
             self.state["stopped_at"] = None
             self.state["startup_started_at"] = startup_started_at
             self.state["startup_duration_seconds"] = None
+            self.state["machine_uptime_seconds"] = 0.0
         self._save_state()
         self._event("manager_initialized", f"manager initialized; autostart={self.autostart}")
 
@@ -473,6 +487,8 @@ class RunpodManager:
         return priority_ids[0] if priority_ids else None
 
     def _ensure_startup_timer(self):
+        if self.startup_started_monotonic is None:
+            self.startup_started_monotonic = time.monotonic()
         if self.state.get("startup_started_at"):
             return
         self._update_state(
@@ -480,6 +496,11 @@ class RunpodManager:
             startup_duration_seconds=None,
             ready_at=None,
         )
+
+    def _startup_elapsed_seconds(self, ended_at=None):
+        if self.startup_started_monotonic is not None:
+            return round(max(0.0, time.monotonic() - self.startup_started_monotonic), 1)
+        return elapsed_seconds(self.state.get("startup_started_at"), ended_at)
 
     def _pod_details(self, pod_id):
         return self._run_cli("pod", "get", pod_id, "--include-machine", "-o", "json")
@@ -594,6 +615,7 @@ class RunpodManager:
                 data_center_id=dc_id,
                 cost_per_hour=price,
                 runtime_status="initializing",
+                machine_uptime_seconds=0.0,
                 status="starting",
                 phase="initializing",
                 message=f"Pod {pod_id} is initializing",
@@ -708,10 +730,7 @@ class RunpodManager:
         startup_duration = self.state.get("startup_duration_seconds")
         if first_running:
             ready_at = utc_now()
-            startup_duration = elapsed_seconds(
-                self.state.get("startup_started_at") or self.state.get("created_at"),
-                ready_at,
-            )
+            startup_duration = self._startup_elapsed_seconds(ready_at)
         self._update_state(
             status="running",
             phase="ready",
@@ -739,6 +758,7 @@ class RunpodManager:
             data_center_id=None,
             cost_per_hour=None,
             runtime_status="terminated",
+            machine_uptime_seconds=None,
         )
 
     def reconcile(self):
@@ -797,7 +817,11 @@ class RunpodManager:
             return
 
         runtime = pod_runtime_status(pod)
-        self._update_state(runtime_status=runtime)
+        runtime_changes = {"runtime_status": runtime}
+        machine_uptime = pod_uptime_seconds(pod)
+        if machine_uptime is not None:
+            runtime_changes["machine_uptime_seconds"] = machine_uptime
+        self._update_state(**runtime_changes)
         if runtime == "terminated":
             self._event("pod_terminated", f"managed pod {pod_id} terminated", pod_id=pod_id)
             self._clear_terminated_pod()
@@ -904,6 +928,7 @@ class RunpodManager:
         if self.state.get("desired_running") and self.state.get("status") == "running":
             return
         self.next_retry_at = 0
+        self.startup_started_monotonic = time.monotonic()
         startup_started_at = utc_now()
         self._update_state(
             desired_running=True,
@@ -915,11 +940,13 @@ class RunpodManager:
             ready_at=None,
             startup_started_at=startup_started_at,
             startup_duration_seconds=None,
+            machine_uptime_seconds=0.0,
         )
         self._event("manual_start", "manual RunPod start requested")
         self.wake.set()
 
     def request_stop(self, reason="manual"):
+        self.startup_started_monotonic = None
         self._update_state(
             desired_running=False,
             status="stopping" if self.state.get("pod_id") else "stopped",
@@ -1004,7 +1031,7 @@ class RunpodManager:
         state["data_center_options"] = dc_options
         state["startup_elapsed_seconds"] = None
         if state.get("desired_running") and state.get("startup_duration_seconds") is None:
-            state["startup_elapsed_seconds"] = elapsed_seconds(state.get("startup_started_at"))
+            state["startup_elapsed_seconds"] = self._startup_elapsed_seconds()
         state["configuration_applies_on_next_creation"] = not self._current_pod_allowed()
         return state
 

@@ -403,6 +403,14 @@
 
     function runpodMachineUptimeSeconds(runpod) {
       if (!runpod || !runpod.pod_id) return null;
+      if (Number.isFinite(runpod.machine_uptime_seconds)) {
+        let uptime = Math.max(0, Number(runpod.machine_uptime_seconds));
+        const observedAt = timestampMilliseconds(runpod.updated_at);
+        if (runpod.status !== "stopped" && Number.isFinite(observedAt)) {
+          uptime += Math.max(0, Date.now() - observedAt) / 1000;
+        }
+        return uptime;
+      }
       const startTimes = [runpod.created_at, runpod.startup_started_at]
         .map(timestampMilliseconds)
         .filter((value) => Number.isFinite(value));

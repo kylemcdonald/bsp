@@ -66,6 +66,7 @@ class RunpodManagerTests(unittest.TestCase):
         self.assertTrue(manager.state["desired_running"])
         self.assertEqual(manager.state["status"], "starting")
         self.assertEqual(manager.state["phase"], "boot")
+        self.assertEqual(manager.state["machine_uptime_seconds"], 0.0)
 
     def test_create_prefers_us_ca_2_and_first_allowed_card(self):
         self.set_stock()
@@ -166,6 +167,7 @@ class RunpodManagerTests(unittest.TestCase):
             "id": "pod123",
             "desiredStatus": "RUNNING",
             "runtimeStatus": "running",
+            "uptimeSeconds": 41,
         })
 
         with mock.patch.object(
@@ -181,11 +183,15 @@ class RunpodManagerTests(unittest.TestCase):
             module.requests,
             "get",
             return_value=FakeResponse({"ok": True, "model_loaded": True, "preload": {"state": "loaded"}}),
-        ), mock.patch.object(module, "utc_now", return_value="2026-08-19T10:02:16Z"):
+        ), mock.patch.object(
+            module, "utc_now", return_value="2026-08-19T10:02:16Z"
+        ), mock.patch.object(module.time, "monotonic", return_value=236.0):
+            self.manager.startup_started_monotonic = 100.0
             self.manager.reconcile()
         self.assertEqual(self.manager.state["status"], "running")
         self.assertEqual(self.manager.state["phase"], "ready")
         self.assertEqual(self.manager.state["startup_duration_seconds"], 136.0)
+        self.assertEqual(self.manager.state["machine_uptime_seconds"], 41.0)
 
     def test_manual_stop_waits_for_provider_stopped_status(self):
         self.manager.state.update({"pod_id": "pod123", "desired_running": True, "status": "running"})
@@ -333,14 +339,17 @@ class RunpodManagerTests(unittest.TestCase):
             ],
         )
 
-    def test_public_status_reports_live_startup_elapsed_time(self):
+    def test_public_status_uses_monotonic_startup_time_across_wall_clock_jump(self):
         self.manager.state.update({
             "desired_running": True,
             "status": "starting",
-            "startup_started_at": "2026-08-19T10:00:00Z",
+            "startup_started_at": "2026-04-15T18:33:10Z",
             "startup_duration_seconds": None,
         })
-        with mock.patch.object(module, "utc_now", return_value="2026-08-19T10:00:42Z"):
+        self.manager.startup_started_monotonic = 100.0
+        with mock.patch.object(
+            module, "utc_now", return_value="2026-08-19T10:00:42Z"
+        ), mock.patch.object(module.time, "monotonic", return_value=142.0):
             status = self.manager.public_status()
         self.assertEqual(status["startup_elapsed_seconds"], 42.0)
 

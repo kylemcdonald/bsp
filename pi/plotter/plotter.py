@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+import datetime as dt
 import json
 import os
 import serial
@@ -794,15 +795,63 @@ def refresh_runpod_status(force=False):
         runpod_status_cache_at = now
     return payload
 
+def corrected_runpod_startup_timing(payload):
+    corrected = dict(payload)
+    # A Pi without a real-time clock can boot with an old wall time and then
+    # jump forward when NTP synchronizes. Startup cannot have taken longer
+    # than this Pi boot, so constrain stale manager data to that invariant.
+    try:
+        with open('/proc/uptime') as uptime_file:
+            system_uptime = float(uptime_file.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        system_uptime = None
+    if system_uptime is not None:
+        startup_elapsed = corrected.get('startup_elapsed_seconds')
+        startup_duration = corrected.get('startup_duration_seconds')
+        stale_startup_clock = (
+            isinstance(startup_elapsed, (int, float)) and startup_elapsed > system_uptime
+        ) or (
+            isinstance(startup_duration, (int, float)) and startup_duration > system_uptime
+        )
+        if stale_startup_clock:
+            boot_time = dt.datetime.fromtimestamp(
+                time.time() - system_uptime,
+                tz=dt.timezone.utc,
+            )
+            corrected['startup_started_at'] = boot_time.replace(microsecond=0).isoformat().replace(
+                '+00:00',
+                'Z',
+            )
+        if isinstance(startup_elapsed, (int, float)) and startup_elapsed > system_uptime:
+            corrected['startup_elapsed_seconds'] = round(system_uptime, 1)
+
+        if isinstance(startup_duration, (int, float)) and startup_duration > system_uptime:
+            corrected_duration = system_uptime
+            try:
+                ready_at = dt.datetime.fromisoformat(
+                    str(corrected.get('ready_at')).replace('Z', '+00:00')
+                ).timestamp()
+                corrected_duration = system_uptime - max(0.0, time.time() - ready_at)
+            except (TypeError, ValueError):
+                pass
+            corrected['startup_duration_seconds'] = round(
+                max(0.0, min(system_uptime, corrected_duration)),
+                1,
+            )
+    return corrected
+
 def runpod_status_summary(payload):
     keys = (
         'status', 'phase', 'message', 'last_error', 'desired_running',
         'pod_id', 'pod_name', 'endpoint', 'gpu_id', 'gpu_name',
-        'data_center_id', 'cost_per_hour', 'runtime_status', 'updated_at',
+        'data_center_id', 'cost_per_hour', 'runtime_status',
+        'machine_uptime_seconds', 'updated_at',
         'startup_started_at', 'startup_elapsed_seconds',
         'startup_duration_seconds', 'created_at', 'ready_at', 'stopped_at',
     )
-    return {key: payload.get(key) for key in keys if key in payload}
+    corrected = corrected_runpod_startup_timing(payload)
+    summary = {key: corrected.get(key) for key in keys if key in corrected}
+    return summary
 
 def runpod_manager_request(method, path, payload=None):
     global runpod_status_cache_at
@@ -818,6 +867,8 @@ def runpod_manager_request(method, path, payload=None):
         return {'error': f'RunPod manager request failed: {e}'}, 502
     except ValueError as e:
         return {'error': f'RunPod manager returned invalid JSON: {e}'}, 502
+    if isinstance(body, dict):
+        body = corrected_runpod_startup_timing(body)
     with runpod_status_lock:
         runpod_status_cache_at = 0.0
     if response.status_code >= 400:
