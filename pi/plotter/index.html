@@ -190,6 +190,32 @@
       align-items: center;
     }
 
+    .runpod-startup-time {
+      display: grid;
+      grid-template-columns: 110px 8ch minmax(80px, 1fr);
+      gap: 10px;
+      align-items: center;
+      min-height: 40px;
+      padding: 8px 11px;
+      border-radius: 6px;
+      background: #ecece7;
+    }
+
+    .runpod-startup-time-label {
+      font-weight: 650;
+    }
+
+    .runpod-startup-time-value {
+      width: 8ch;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .runpod-startup-time-state {
+      color: #555;
+      font-size: 13px;
+    }
+
     .status-pill {
       display: inline-block;
       min-width: 82px;
@@ -350,17 +376,19 @@
     let showAllRunpodRegions = false;
 
     function setText(id, text) {
-      document.getElementById(id).innerText = text;
+      const element = document.getElementById(id);
+      const nextText = String(text);
+      if (element.textContent !== nextText) element.textContent = nextText;
     }
 
-    function formatDuration(totalSeconds) {
+    function formatDurationClock(totalSeconds) {
       const seconds = Math.max(0, Math.round(Number(totalSeconds) || 0));
-      if (seconds < 60) return `${seconds}s`;
-      const minutes = Math.floor(seconds / 60);
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
       const remainder = seconds % 60;
-      if (minutes < 60) return `${minutes}m ${remainder}s`;
-      const hours = Math.floor(minutes / 60);
-      return `${hours}h ${minutes % 60}m ${remainder}s`;
+      return [hours, minutes, remainder]
+        .map((value) => String(value).padStart(2, "0"))
+        .join(":");
     }
 
     async function getJson(url) {
@@ -530,11 +558,13 @@
     function renderRunpodSummary(runpod) {
       const status = runpod.status || "error";
       const pill = document.getElementById("runpod-status-pill");
-      pill.innerText = status;
-      pill.className = `status-pill ${status}`;
+      setText("runpod-status-pill", status);
+      const pillClass = `status-pill ${status}`;
+      if (pill.className !== pillClass) pill.className = pillClass;
       setText("runpod-status-message", runpod.message || "");
       const endpoint = runpod.endpoint || "";
-      document.getElementById("processor-endpoint-url").value = endpoint;
+      const endpointInput = document.getElementById("processor-endpoint-url");
+      if (endpointInput.value !== endpoint) endpointInput.value = endpoint;
       const openLink = document.getElementById("processor-endpoint-open");
       openLink.href = endpoint ? endpoint.replace(/\/api\/process$/, "/") : "#";
       openLink.style.pointerEvents = endpoint ? "auto" : "none";
@@ -545,12 +575,18 @@
       if (runpod.data_center_id) detailLines.push(`Region: ${runpod.data_center_id}`);
       if (Number.isFinite(runpod.cost_per_hour)) detailLines.push(`Rate: $${Number(runpod.cost_per_hour).toFixed(2)}/hr`);
       if (runpod.phase) detailLines.push(`Phase: ${runpod.phase}`);
+      let startupTime = "--:--:--";
+      let startupTimeState = "not measured";
       if (Number.isFinite(runpod.startup_duration_seconds)) {
-        detailLines.push(`Startup time: ${formatDuration(runpod.startup_duration_seconds)}`);
+        startupTime = formatDurationClock(runpod.startup_duration_seconds);
+        startupTimeState = "total";
       } else if (Number.isFinite(runpod.startup_elapsed_seconds)) {
-        detailLines.push(`Startup time: ${formatDuration(runpod.startup_elapsed_seconds)} elapsed`);
+        startupTime = formatDurationClock(runpod.startup_elapsed_seconds);
+        startupTimeState = "elapsed";
       }
       setText("runpod-details", detailLines.length ? detailLines.join("\n") : "No managed pod yet.");
+      setText("runpod-startup-time-value", startupTime);
+      setText("runpod-startup-time-state", startupTimeState);
       document.getElementById("runpod-start").disabled = status === "running";
       document.getElementById("runpod-stop").disabled = status === "stopped" && !runpod.desired_running;
     }
@@ -1081,6 +1117,11 @@
             <a class="button-link" id="processor-endpoint-open" href="#" target="_blank" rel="noopener">Open</a>
           </div>
           <div class="runpod-details" id="runpod-details">No managed pod yet.</div>
+          <div class="runpod-startup-time">
+            <span class="runpod-startup-time-label">Startup time</span>
+            <output class="runpod-startup-time-value" id="runpod-startup-time-value">--:--:--</output>
+            <span class="runpod-startup-time-state" id="runpod-startup-time-state">not measured</span>
+          </div>
           <div class="actions">
             <button class="primary" id="runpod-start" onclick="runRunpodAction('start')">Start</button>
             <button id="runpod-stop" onclick="runRunpodAction('stop')">Stop</button>
