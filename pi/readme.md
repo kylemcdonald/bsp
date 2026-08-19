@@ -245,16 +245,21 @@ condition clears:
 - network disconnected: one `100ms` flash, then `1000ms` off
 - camera disconnected: two `100ms` flashes with `100ms` off between them, then `1000ms` off
 - plotter error: three `100ms` flashes with `100ms` off between them, then `1000ms` off
-- RunPod processor starting: four `100ms` flashes with `100ms` off between them, then `1000ms` off
+- RunPod processor requested but not ready: four `100ms` flashes with `100ms` off between them, then `1000ms` off
 
 The button service consumes the plotter's aggregated `GET /status` response,
 including its nested RunPod manager status, rather than polling RunPod itself.
 It checks for a local default route, whether it is provided by Ethernet or
-Wi-Fi, then probes the configured processor endpoint. Endpoint unreachability
-is expected and ignored while the RunPod manager reports `starting`, but a
-missing default route still reports a network error. A missing camera status
-response is treated as camera disconnected. A missing plotter status response
-or plotter `ERROR` state is treated as plotter error.
+Wi-Fi, then probes the configured processor endpoint after the RunPod manager
+reports `running`. Endpoint unreachability is expected and ignored before then,
+but a missing default route still reports a network error. A missing camera
+status response is treated as camera disconnected. A missing plotter status
+response or plotter `ERROR` state is treated as plotter error.
+
+Solid white requires a confirmed RunPod `running` status in addition to the
+normal plotter button-light state. Unknown, retrying, blocked, error, and
+starting states use the four-flash pattern while the processor is desired. A
+deliberately stopped processor leaves the LED off.
 
 When more than one condition is present, the LED reports the first one in this
 order: network, camera, plotter, RunPod starting. During a normal capture, the

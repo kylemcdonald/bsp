@@ -8,7 +8,12 @@ from urllib.parse import urlparse
 from gpiozero import InputDevice, LED
 import requests
 
-from led_feedback import PATTERNS, led_pattern_on, service_feedback_pattern
+from led_feedback import (
+    PATTERNS,
+    led_pattern_on,
+    runpod_processor_ready,
+    service_feedback_pattern,
+)
 
 # RPI enumeration is:
 # pin 5 & 6 are used for the button (3 & ground)
@@ -32,6 +37,7 @@ last_network_poll = 0
 network_ready = False
 processor_endpoint = None
 runpod_status = None
+runpod_desired_running = None
 led_pattern_name = None
 led_pattern_started = 0
 restart_ready_logged = False
@@ -64,7 +70,8 @@ def get(url):
     get_json(url)
 
 def apply_status(payload):
-    global button_light_enabled, plotter_last_error, plotter_ready, plotter_state, processor_endpoint, runpod_status
+    global button_light_enabled, plotter_last_error, plotter_ready, plotter_state, processor_endpoint
+    global runpod_desired_running, runpod_status
     if not isinstance(payload, dict):
         plotter_ready = False
         return
@@ -75,9 +82,15 @@ def apply_status(payload):
     button_light_enabled = bool(payload.get('button_light', True))
     runpod = payload.get('runpod')
     runpod_status = runpod.get('status') if isinstance(runpod, dict) else None
+    runpod_desired_running = runpod.get('desired_running') if isinstance(runpod, dict) else None
 
 def services_ready():
-    return network_ready and plotter_ready and camera_ready
+    return (
+        network_ready
+        and plotter_ready
+        and camera_ready
+        and runpod_processor_ready(runpod_status)
+    )
 
 def has_default_route():
     try:
@@ -106,7 +119,7 @@ def processor_reachable():
 def check_network():
     if not has_default_route():
         return False
-    if runpod_status == 'starting':
+    if not runpod_processor_ready(runpod_status):
         return True
     return processor_reachable()
 
@@ -117,6 +130,7 @@ def current_error_pattern():
         plotter_ready,
         plotter_state,
         runpod_status,
+        runpod_desired_running,
     )
 
 def update_led(now):
@@ -146,7 +160,7 @@ def update_led(now):
     if led_pattern_name is not None:
         print('button> LED pattern cleared', flush=True)
         led_pattern_name = None
-    if button_light_enabled:
+    if button_light_enabled and runpod_processor_ready(runpod_status):
         led.on()
     else:
         led.off()

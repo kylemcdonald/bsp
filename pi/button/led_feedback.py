@@ -14,6 +14,7 @@ def service_feedback_pattern(
     plotter_ready,
     plotter_state,
     runpod_status,
+    runpod_desired_running,
 ):
     if not network_ready:
         return 'network_error'
@@ -21,9 +22,13 @@ def service_feedback_pattern(
         return 'camera_error'
     if not plotter_ready or plotter_state == 'ERROR':
         return 'plotter_error'
-    if runpod_status == 'starting':
+    if not runpod_processor_ready(runpod_status) and runpod_desired_running is not False:
         return 'runpod_starting'
     return None
+
+
+def runpod_processor_ready(runpod_status):
+    return runpod_status == 'running'
 
 
 def led_pattern_on(pattern, elapsed):
