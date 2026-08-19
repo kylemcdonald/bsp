@@ -159,6 +159,13 @@
       grid-column: 1 / -1;
     }
 
+    .region-visibility-button {
+      min-height: 36px;
+      margin: 0 0 8px;
+      padding: 6px 10px;
+      font-size: 14px;
+    }
+
     input[readonly] {
       background: #ecece7;
       color: #444;
@@ -340,6 +347,7 @@
     let runpodConfigDirty = false;
     let runpodOptionSignature = "";
     let latestRunpodStatus = null;
+    let showAllRunpodRegions = false;
 
     function setText(id, text) {
       document.getElementById(id).innerText = text;
@@ -603,6 +611,12 @@
       if (latestRunpodStatus) renderRunpodOptions(latestRunpodStatus);
     }
 
+    function toggleRunpodRegions() {
+      showAllRunpodRegions = !showAllRunpodRegions;
+      runpodOptionSignature = "";
+      if (latestRunpodStatus) renderRunpodOptions(latestRunpodStatus);
+    }
+
     function renderRunpodOptions(runpod) {
       latestRunpodStatus = runpod;
       const config = runpod.config || {};
@@ -656,10 +670,19 @@
 
         const priorityContainer = document.getElementById("runpod-priority-region-options");
         priorityContainer.replaceChildren();
-        deploymentDataCenters.forEach((option) => {
+        const dataCentersWithAvailability = deploymentDataCenters.map((option) => {
           const availableCardCount = gpuOptions.filter((gpu) => (
             runpodStockAvailable((gpu.data_center_availability || {})[option.id])
           )).length;
+          return { option, availableCardCount };
+        });
+        const availableDataCenters = dataCentersWithAvailability.filter(
+          (item) => item.availableCardCount > 0,
+        );
+        const displayedDataCenters = showAllRunpodRegions
+          ? dataCentersWithAvailability
+          : availableDataCenters;
+        displayedDataCenters.forEach(({ option, availableCardCount }) => {
           const cardSummary = availableCardCount
             ? `${availableCardCount} available card${availableCardCount === 1 ? "" : "s"}`
             : "no supported cards available";
@@ -672,6 +695,15 @@
             runpodRegionSelectionChanged,
           );
         });
+        if (!displayedDataCenters.length) {
+          const empty = document.createElement("div");
+          empty.className = "field-help";
+          empty.innerText = "No data centers in this geography currently have a supported card available.";
+          priorityContainer.append(empty);
+        }
+        document.getElementById("runpod-region-visibility").innerText = showAllRunpodRegions
+          ? "Hide unavailable regions"
+          : "Show all regions";
 
         const gpuContainer = document.getElementById("runpod-card-options");
         gpuContainer.replaceChildren();
@@ -710,7 +742,9 @@
           || "the deployment geography";
         const prioritySummary = priorityDataCenters.length
           ? `${priorityDataCenters.join(", ")} ${priorityDataCenters.length === 1 ? "is" : "are"} checked first. Other data centers in ${deploymentName} are automatic fallbacks. Only cards currently available in a selected priority data center are shown below.`
-          : `Select at least one priority data center in ${deploymentName}.`;
+          : availableDataCenters.length
+            ? `Select at least one priority data center in ${deploymentName}.`
+            : `No data centers in ${deploymentName} currently have a supported card available.`;
         setText(
           "runpod-region-help",
           prioritySummary,
@@ -1063,6 +1097,7 @@
             </div>
             <div>
               <div class="field-label" id="runpod-priority-region-label">Priority data centers</div>
+              <button class="region-visibility-button" id="runpod-region-visibility" type="button" onclick="toggleRunpodRegions()">Show all regions</button>
               <div class="option-grid" id="runpod-priority-region-options" aria-labelledby="runpod-priority-region-label"></div>
             </div>
             <div class="field-help" id="runpod-region-help">Loading region availability...</div>

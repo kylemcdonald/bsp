@@ -17,6 +17,8 @@ Asia Pacific are available deployment geographies. North America defaults to
 before other data centers in the deployment geography. The card selector only
 shows supported cards with current stock in at least one checked priority data
 center, along with the stock status at each matching center.
+Priority data centers without supported-card stock are hidden by default; the
+UI toggle can show all regions and hide unavailable regions again.
 Selections apply immediately to the next new pod. If a stopped managed pod no
 longer uses an allowed card or deployment geography, the manager deletes that
 stopped pod and creates a replacement when Start is requested or the Pi next
