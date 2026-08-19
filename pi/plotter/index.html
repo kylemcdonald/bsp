@@ -150,6 +150,15 @@
       font-size: 13px;
     }
 
+    .field-label {
+      margin: 12px 0 7px;
+      font-weight: 700;
+    }
+
+    .option-grid > .field-help {
+      grid-column: 1 / -1;
+    }
+
     input[readonly] {
       background: #ecece7;
       color: #444;
@@ -542,7 +551,7 @@
       return Array.from(document.querySelectorAll(`input[name="${name}"]:checked`)).map((input) => input.value);
     }
 
-    function addRunpodOption(container, name, value, label, checked) {
+    function addRunpodOption(container, name, value, label, checked, onChange = null) {
       const row = document.createElement("label");
       row.className = "option-item";
       const checkbox = document.createElement("input");
@@ -553,6 +562,7 @@
       checkbox.addEventListener("change", () => {
         runpodConfigDirty = true;
         setText("runpod-config-status", "Unsaved deployment preference changes.");
+        if (onChange) onChange();
       });
       const text = document.createElement("span");
       text.innerText = label;
@@ -579,6 +589,11 @@
         return "Unavailable";
       }
       return String(stock);
+    }
+
+    function runpodStockAvailable(stock) {
+      const normalized = String(stock || "none").trim().toLowerCase();
+      return !["", "none", "unavailable", "sold out"].includes(normalized);
     }
 
     function runpodRegionSelectionChanged() {
@@ -608,12 +623,12 @@
         runpodConfigDirty ? null : [
           config.allowed_gpu_ids,
           config.deployment_region,
-          config.priority_data_center_id,
+          config.priority_data_center_ids || [config.priority_data_center_id],
         ],
       ]);
       if (signature !== runpodOptionSignature) {
         const deploymentSelect = document.getElementById("runpod-deployment-region");
-        const prioritySelect = document.getElementById("runpod-priority-region");
+        const existingPriorityInputs = document.querySelectorAll('input[name="runpod-priority-region"]');
         const existingGpuInputs = document.querySelectorAll('input[name="runpod-gpu"]');
         const selectedGpus = runpodConfigDirty && existingGpuInputs.length
           ? new Set(selectedRunpodValues("runpod-gpu"))
@@ -621,9 +636,12 @@
         const selectedDeployment = runpodConfigDirty && deploymentSelect.value
           ? deploymentSelect.value
           : (config.deployment_region || deploymentOptions[0]?.id || "");
-        const selectedPriority = runpodConfigDirty && prioritySelect.value
-          ? prioritySelect.value
-          : (config.priority_data_center_id || config.preferred_data_center_id || "");
+        const selectedPriorities = runpodConfigDirty && existingPriorityInputs.length
+          ? new Set(selectedRunpodValues("runpod-priority-region"))
+          : new Set(
+            config.priority_data_center_ids
+              || [config.priority_data_center_id || config.preferred_data_center_id].filter(Boolean),
+          );
 
         populateRunpodSelect(
           deploymentSelect,
@@ -634,24 +652,44 @@
         const deploymentDataCenters = regionOptions.filter((option) => (
           !option.deployment_region || option.deployment_region === deploymentSelect.value
         ));
-        populateRunpodSelect(
-          prioritySelect,
-          deploymentDataCenters,
-          selectedPriority,
-          (option) => `${option.id} — ${option.location || "North America"}`,
-        );
         deploymentSelect.onchange = runpodRegionSelectionChanged;
-        prioritySelect.onchange = runpodRegionSelectionChanged;
+
+        const priorityContainer = document.getElementById("runpod-priority-region-options");
+        priorityContainer.replaceChildren();
+        deploymentDataCenters.forEach((option) => {
+          const availableCardCount = gpuOptions.filter((gpu) => (
+            runpodStockAvailable((gpu.data_center_availability || {})[option.id])
+          )).length;
+          const cardSummary = availableCardCount
+            ? `${availableCardCount} available card${availableCardCount === 1 ? "" : "s"}`
+            : "no supported cards available";
+          addRunpodOption(
+            priorityContainer,
+            "runpod-priority-region",
+            option.id,
+            `${option.id} — ${option.location || deploymentSelect.value}, ${cardSummary}`,
+            selectedPriorities.has(option.id),
+            runpodRegionSelectionChanged,
+          );
+        });
 
         const gpuContainer = document.getElementById("runpod-card-options");
         gpuContainer.replaceChildren();
-        const priorityDataCenter = prioritySelect.value;
+        const priorityDataCenters = selectedRunpodValues("runpod-priority-region");
+        let availableGpuCount = 0;
         gpuOptions.forEach((option) => {
+          const availability = option.data_center_availability || {};
+          const availablePriorities = priorityDataCenters.filter((dataCenterId) => (
+            runpodStockAvailable(availability[dataCenterId])
+          ));
+          if (!availablePriorities.length) return;
+          availableGpuCount += 1;
           const details = [];
           if (Number.isFinite(option.memory_gb)) details.push(`${option.memory_gb} GB`);
           if (Number.isFinite(option.secure_price_per_hour)) details.push(`$${Number(option.secure_price_per_hour).toFixed(2)}/hr`);
-          const availability = option.data_center_availability || {};
-          details.push(`${priorityDataCenter}: ${formatRunpodAvailability(availability[priorityDataCenter])}`);
+          details.push(availablePriorities.map((dataCenterId) => (
+            `${dataCenterId}: ${formatRunpodAvailability(availability[dataCenterId])}`
+          )).join("; "));
           addRunpodOption(
             gpuContainer,
             "runpod-gpu",
@@ -660,9 +698,22 @@
             selectedGpus.has(option.id),
           );
         });
+        if (!availableGpuCount) {
+          const empty = document.createElement("div");
+          empty.className = "field-help";
+          empty.innerText = priorityDataCenters.length
+            ? "No supported H100, H200, or B200 cards currently have stock in the selected priority data centers."
+            : "Select at least one priority data center to see available cards.";
+          gpuContainer.append(empty);
+        }
+        const deploymentName = deploymentSelect.options[deploymentSelect.selectedIndex]?.text
+          || "the deployment geography";
+        const prioritySummary = priorityDataCenters.length
+          ? `${priorityDataCenters.join(", ")} ${priorityDataCenters.length === 1 ? "is" : "are"} checked first. Other data centers in ${deploymentName} are automatic fallbacks. Only cards currently available in a selected priority data center are shown below.`
+          : `Select at least one priority data center in ${deploymentName}.`;
         setText(
           "runpod-region-help",
-          `${priorityDataCenter || "The selected data center"} is checked first. Other data centers in ${deploymentSelect.options[deploymentSelect.selectedIndex]?.text || "the deployment region"} are automatic fallbacks. Card availability below is for ${priorityDataCenter || "the priority data center"}.`,
+          prioritySummary,
         );
         runpodOptionSignature = signature;
       }
@@ -707,7 +758,7 @@
       const payload = {
         allowed_gpu_ids: selectedRunpodValues("runpod-gpu"),
         deployment_region: document.getElementById("runpod-deployment-region").value,
-        priority_data_center_id: document.getElementById("runpod-priority-region").value,
+        priority_data_center_ids: selectedRunpodValues("runpod-priority-region"),
       };
       setText("runpod-config-status", "Saving...");
       fetch("/runpod/config", {
@@ -1010,11 +1061,9 @@
                 <option>Loading...</option>
               </select>
             </div>
-            <div class="select-row">
-              <label for="runpod-priority-region">Priority data center</label>
-              <select id="runpod-priority-region">
-                <option>Loading...</option>
-              </select>
+            <div>
+              <div class="field-label" id="runpod-priority-region-label">Priority data centers</div>
+              <div class="option-grid" id="runpod-priority-region-options" aria-labelledby="runpod-priority-region-label"></div>
             </div>
             <div class="field-help" id="runpod-region-help">Loading region availability...</div>
           </fieldset>

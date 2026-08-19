@@ -29,7 +29,15 @@ DEFAULT_PRIORITY_DATA_CENTER = "US-CA-2"
 
 DEPLOYMENT_REGION_OPTIONS = [
     {"id": DEFAULT_DEPLOYMENT_REGION, "name": "North America"},
+    {"id": "europe", "name": "Europe"},
+    {"id": "asia-pacific", "name": "Asia Pacific"},
 ]
+
+DATA_CENTER_REGION_PREFIXES = {
+    "north-america": ("US-", "CA-"),
+    "europe": ("EU-", "EUR-"),
+    "asia-pacific": ("AP-", "SEA-", "OC-"),
+}
 
 DEFAULT_GPU_OPTIONS = [
     {"id": "NVIDIA H100 80GB HBM3", "name": "H100 SXM", "memory_gb": 80},
@@ -40,11 +48,12 @@ DEFAULT_GPU_OPTIONS = [
     {"id": "NVIDIA B200", "name": "B200", "memory_gb": 180},
 ]
 
-# US-CA-2 stays first.  The remaining entries cover RunPod's current United
-# States and Canadian data centers and are refreshed from the API at runtime.
+# Static fallbacks cover RunPod's current supported geographies. The live list
+# and stock status are refreshed from the API at runtime.
 DEFAULT_DATA_CENTER_OPTIONS = [
     {"id": "US-CA-2", "name": "US-CA-2", "location": "United States"},
     {"id": "US-CA-1", "name": "US-CA-1", "location": "United States"},
+    {"id": "US-CO-1", "name": "US-CO-1", "location": "United States"},
     {"id": "US-DE-1", "name": "US-DE-1", "location": "United States"},
     {"id": "US-GA-1", "name": "US-GA-1", "location": "United States"},
     {"id": "US-GA-2", "name": "US-GA-2", "location": "United States"},
@@ -73,6 +82,25 @@ DEFAULT_DATA_CENTER_OPTIONS = [
     {"id": "CA-MTL-2", "name": "CA-MTL-2", "location": "Canada"},
     {"id": "CA-MTL-3", "name": "CA-MTL-3", "location": "Canada"},
     {"id": "CA-MTL-4", "name": "CA-MTL-4", "location": "Canada"},
+    {"id": "EU-CZ-1", "name": "EU-CZ-1", "location": "Europe"},
+    {"id": "EU-DK-1", "name": "EU-DK-1", "location": "Europe"},
+    {"id": "EU-FR-1", "name": "EU-FR-1", "location": "France"},
+    {"id": "EU-NL-1", "name": "EU-NL-1", "location": "Europe"},
+    {"id": "EU-RO-1", "name": "EU-RO-1", "location": "Europe"},
+    {"id": "EU-SE-1", "name": "EU-SE-1", "location": "Europe"},
+    {"id": "EU-SE-2", "name": "EU-SE-2", "location": "Europe"},
+    {"id": "EUR-IS-1", "name": "EUR-IS-1", "location": "Europe"},
+    {"id": "EUR-IS-2", "name": "EUR-IS-2", "location": "Europe"},
+    {"id": "EUR-IS-3", "name": "EUR-IS-3", "location": "Europe"},
+    {"id": "EUR-IS-4", "name": "EUR-IS-4", "location": "Europe"},
+    {"id": "EUR-IS-5", "name": "EUR-IS-5", "location": "Europe"},
+    {"id": "EUR-NO-1", "name": "EUR-NO-1", "location": "Europe"},
+    {"id": "EUR-NO-2", "name": "EUR-NO-2", "location": "Europe"},
+    {"id": "AP-IN-1", "name": "AP-IN-1", "location": "India"},
+    {"id": "AP-IN-2", "name": "AP-IN-2", "location": "India"},
+    {"id": "AP-JP-1", "name": "AP-JP-1", "location": "Japan"},
+    {"id": "SEA-SG-1", "name": "SEA-SG-1", "location": "SE Asia"},
+    {"id": "OC-AU-1", "name": "OC-AU-1", "location": "Australia"},
 ]
 
 
@@ -90,6 +118,14 @@ def elapsed_seconds(started_at, ended_at=None):
         return round(max(0.0, (ended - started).total_seconds()), 1)
     except (TypeError, ValueError):
         return None
+
+
+def deployment_region_for_data_center(data_center_id):
+    data_center_id = str(data_center_id or "")
+    for region_id, prefixes in DATA_CENTER_REGION_PREFIXES.items():
+        if data_center_id.startswith(prefixes):
+            return region_id
+    return None
 
 
 def parse_bool(value, default=True):
@@ -182,6 +218,7 @@ class RunpodManager:
             "allowed_data_center_ids": [item["id"] for item in DEFAULT_DATA_CENTER_OPTIONS],
             "deployment_region": DEFAULT_DEPLOYMENT_REGION,
             "priority_data_center_id": DEFAULT_PRIORITY_DATA_CENTER,
+            "priority_data_center_ids": [DEFAULT_PRIORITY_DATA_CENTER],
             "cloud_type": "SECURE",
             "container_disk_gb": 80,
             "container_port": DEFAULT_CONTAINER_PORT,
@@ -239,13 +276,17 @@ class RunpodManager:
         normalized = copy.deepcopy(defaults)
         normalized.update({key: value for key, value in config.items() if key in normalized})
         legacy_dc_ids = config.get("allowed_data_center_ids")
-        if "priority_data_center_id" not in config and isinstance(legacy_dc_ids, list):
-            legacy_dc_ids = [str(value) for value in legacy_dc_ids if value]
-            if DEFAULT_PRIORITY_DATA_CENTER in legacy_dc_ids:
-                normalized["priority_data_center_id"] = DEFAULT_PRIORITY_DATA_CENTER
-            elif legacy_dc_ids:
-                normalized["priority_data_center_id"] = legacy_dc_ids[0]
-        for key in ("allowed_gpu_ids", "allowed_data_center_ids"):
+        if "priority_data_center_ids" not in config:
+            singular_priority = str(config.get("priority_data_center_id") or "").strip()
+            if singular_priority:
+                normalized["priority_data_center_ids"] = [singular_priority]
+            elif isinstance(legacy_dc_ids, list):
+                legacy_dc_ids = [str(value) for value in legacy_dc_ids if value]
+                if DEFAULT_PRIORITY_DATA_CENTER in legacy_dc_ids:
+                    normalized["priority_data_center_ids"] = [DEFAULT_PRIORITY_DATA_CENTER]
+                elif legacy_dc_ids:
+                    normalized["priority_data_center_ids"] = [legacy_dc_ids[0]]
+        for key in ("allowed_gpu_ids", "allowed_data_center_ids", "priority_data_center_ids"):
             values = normalized.get(key)
             if not isinstance(values, list):
                 normalized[key] = copy.deepcopy(defaults[key])
@@ -255,8 +296,20 @@ class RunpodManager:
             option["id"] for option in DEPLOYMENT_REGION_OPTIONS
         }:
             normalized["deployment_region"] = DEFAULT_DEPLOYMENT_REGION
-        priority = str(normalized.get("priority_data_center_id") or "").strip()
-        normalized["priority_data_center_id"] = priority or DEFAULT_PRIORITY_DATA_CENTER
+        priority_ids = [
+            data_center_id
+            for data_center_id in normalized["priority_data_center_ids"]
+            if deployment_region_for_data_center(data_center_id) == normalized["deployment_region"]
+        ]
+        if not priority_ids:
+            fallback_ids = [
+                item["id"]
+                for item in DEFAULT_DATA_CENTER_OPTIONS
+                if deployment_region_for_data_center(item["id"]) == normalized["deployment_region"]
+            ]
+            priority_ids = fallback_ids[:1]
+        normalized["priority_data_center_ids"] = priority_ids
+        normalized["priority_data_center_id"] = priority_ids[0] if priority_ids else None
         return normalized
 
     def _save_state(self):
@@ -347,25 +400,26 @@ class RunpodManager:
         order = {item["id"]: index for index, item in enumerate(DEFAULT_GPU_OPTIONS)}
         gpu_options.sort(key=lambda item: order.get(item["id"], 999))
 
-        priority_dc_id = self.config.get("priority_data_center_id") or DEFAULT_PRIORITY_DATA_CENTER
+        priority_dc_ids = set(self.config.get("priority_data_center_ids") or [])
+        region_order = {
+            option["id"]: index for index, option in enumerate(DEPLOYMENT_REGION_OPTIONS)
+        }
         dc_options = []
         for dc in dc_payload if isinstance(dc_payload, list) else []:
             dc_id = str(dc.get("id") or "")
             location = str(dc.get("location") or "")
-            if not dc_id or not (dc_id.startswith("US-") or dc_id.startswith("CA-")):
-                continue
-            if location and location not in ("United States", "Canada"):
+            deployment_region = deployment_region_for_data_center(dc_id)
+            if not dc_id or not deployment_region:
                 continue
             dc_options.append({
                 "id": dc_id,
                 "name": dc.get("name") or dc_id,
-                "location": location or ("Canada" if dc_id.startswith("CA-") else "United States"),
-                "deployment_region": DEFAULT_DEPLOYMENT_REGION,
-                "preferred": dc_id == priority_dc_id,
+                "location": location or deployment_region,
+                "deployment_region": deployment_region,
+                "preferred": dc_id in priority_dc_ids,
             })
         dc_options.sort(key=lambda item: (
-            item["id"] != priority_dc_id,
-            item["location"],
+            region_order.get(item["deployment_region"], 999),
             item["id"],
         ))
 
@@ -383,29 +437,40 @@ class RunpodManager:
 
     def _deployment_data_center_ids(self, deployment_region=None):
         deployment_region = deployment_region or self.config.get("deployment_region")
-        if deployment_region != DEFAULT_DEPLOYMENT_REGION:
+        if deployment_region not in {option["id"] for option in DEPLOYMENT_REGION_OPTIONS}:
             return []
         ids = [
             item["id"]
             for item in self.data_center_options
             if item.get("id")
-            and (
-                item.get("deployment_region") == DEFAULT_DEPLOYMENT_REGION
-                or str(item["id"]).startswith(("US-", "CA-"))
-            )
+            and (item.get("deployment_region") or deployment_region_for_data_center(item["id"]))
+            == deployment_region
         ]
         if not ids:
-            ids = [item["id"] for item in DEFAULT_DATA_CENTER_OPTIONS]
+            ids = [
+                item["id"]
+                for item in DEFAULT_DATA_CENTER_OPTIONS
+                if deployment_region_for_data_center(item["id"]) == deployment_region
+            ]
         return list(dict.fromkeys(ids))
 
+    def _priority_data_center_ids(self, deployment_region=None):
+        deployment_region = deployment_region or self.config.get("deployment_region")
+        data_center_ids = self._deployment_data_center_ids(deployment_region)
+        configured = self.config.get("priority_data_center_ids") or []
+        priorities = [data_center_id for data_center_id in configured if data_center_id in data_center_ids]
+        if priorities:
+            return priorities
+        if (
+            deployment_region == DEFAULT_DEPLOYMENT_REGION
+            and DEFAULT_PRIORITY_DATA_CENTER in data_center_ids
+        ):
+            return [DEFAULT_PRIORITY_DATA_CENTER]
+        return data_center_ids[:1]
+
     def _priority_data_center_id(self):
-        data_center_ids = self._deployment_data_center_ids()
-        configured = self.config.get("priority_data_center_id")
-        if configured in data_center_ids:
-            return configured
-        if DEFAULT_PRIORITY_DATA_CENTER in data_center_ids:
-            return DEFAULT_PRIORITY_DATA_CENTER
-        return data_center_ids[0] if data_center_ids else None
+        priority_ids = self._priority_data_center_ids()
+        return priority_ids[0] if priority_ids else None
 
     def _ensure_startup_timer(self):
         if self.state.get("startup_started_at"):
@@ -446,8 +511,12 @@ class RunpodManager:
         gpu_by_id = {item["id"]: item for item in self.gpu_options}
         selected_gpus = [gpu_id for gpu_id in self.config["allowed_gpu_ids"] if gpu_id in gpu_by_id]
         selected_dcs = self._deployment_data_center_ids()
-        priority_dc_id = self._priority_data_center_id()
-        selected_dcs.sort(key=lambda dc_id: (dc_id != priority_dc_id, dc_id))
+        priority_dc_ids = self._priority_data_center_ids()
+        priority_order = {dc_id: index for index, dc_id in enumerate(priority_dc_ids)}
+        selected_dcs.sort(key=lambda dc_id: (
+            priority_order.get(dc_id, len(priority_order)),
+            dc_id,
+        ))
         candidates = []
         for dc_id in selected_dcs:
             for gpu_id in selected_gpus:
@@ -466,7 +535,9 @@ class RunpodManager:
             raise RunpodCLIError("The selected deployment region has no RunPod data centers")
         candidates = self._candidate_pairs()
         if not candidates:
-            raise RunpodCLIError("No selected H100/H200/B200 card currently has stock in a selected North American region")
+            raise RunpodCLIError(
+                "No selected H100/H200/B200 card currently has stock in the selected deployment region"
+            )
 
         environment = json.dumps({
             "QWEN_PARKING_MODE": "all_cuda",
@@ -865,31 +936,45 @@ class RunpodManager:
             raise ValueError("configuration must be a JSON object")
         gpu_ids = payload.get("allowed_gpu_ids")
         deployment_region = str(payload.get("deployment_region") or "").strip()
-        priority_dc_id = str(payload.get("priority_data_center_id") or "").strip()
+        priority_dc_ids = payload.get("priority_data_center_ids")
+        if priority_dc_ids is None and payload.get("priority_data_center_id"):
+            priority_dc_ids = [payload["priority_data_center_id"]]
         known_gpu_ids = {item["id"] for item in self.gpu_options}
         known_deployment_regions = {item["id"] for item in DEPLOYMENT_REGION_OPTIONS}
         deployment_dc_ids = self._deployment_data_center_ids(deployment_region)
-        if not isinstance(gpu_ids, list) or not gpu_ids:
-            raise ValueError("select at least one GPU card")
         if deployment_region not in known_deployment_regions:
             raise ValueError("select a supported deployment region")
-        if priority_dc_id not in deployment_dc_ids:
-            raise ValueError("select a priority data center within the deployment region")
+        if not isinstance(priority_dc_ids, list) or not priority_dc_ids:
+            raise ValueError("select at least one priority data center")
+        if not isinstance(gpu_ids, list) or not gpu_ids:
+            raise ValueError("select at least one GPU card")
         gpu_ids = list(dict.fromkeys(str(value) for value in gpu_ids))
+        priority_dc_ids = list(dict.fromkeys(str(value) for value in priority_dc_ids if value))
+        if not priority_dc_ids:
+            raise ValueError("select at least one priority data center")
+        invalid_priority_ids = [
+            data_center_id
+            for data_center_id in priority_dc_ids
+            if data_center_id not in deployment_dc_ids
+        ]
+        if invalid_priority_ids:
+            raise ValueError("select priority data centers within the deployment region")
         unknown_gpus = [value for value in gpu_ids if value not in known_gpu_ids]
         if unknown_gpus:
             raise ValueError(f"unsupported GPU card(s): {', '.join(unknown_gpus)}")
         with self.lock:
             self.config["allowed_gpu_ids"] = gpu_ids
             self.config["deployment_region"] = deployment_region
-            self.config["priority_data_center_id"] = priority_dc_id
+            self.config["priority_data_center_ids"] = priority_dc_ids
+            self.config["priority_data_center_id"] = priority_dc_ids[0]
             # Retain this derived field so existing installations and diagnostic
             # scripts can read a complete list during the UI migration.
             self.config["allowed_data_center_ids"] = deployment_dc_ids
             atomic_write_json(self.config_path, self.config)
         self._event(
             "configuration_updated",
-            f"RunPod cards updated; {priority_dc_id} is first in {deployment_region}",
+            f"RunPod cards updated; priority data centers in {deployment_region}: "
+            + ", ".join(priority_dc_ids),
         )
         self.wake.set()
         return self.public_status()
@@ -901,14 +986,16 @@ class RunpodManager:
             gpu_options = copy.deepcopy(self.gpu_options)
             dc_options = copy.deepcopy(self.data_center_options)
         deployment_dc_ids = self._deployment_data_center_ids(config["deployment_region"])
-        priority_dc_id = self._priority_data_center_id()
+        priority_dc_ids = self._priority_data_center_ids(config["deployment_region"])
+        priority_dc_id = priority_dc_ids[0] if priority_dc_ids else None
         for option in dc_options:
-            option["preferred"] = option.get("id") == priority_dc_id
+            option["preferred"] = option.get("id") in priority_dc_ids
         state["config"] = {
             "allowed_gpu_ids": config["allowed_gpu_ids"],
             "allowed_data_center_ids": deployment_dc_ids,
             "deployment_region": config["deployment_region"],
             "priority_data_center_id": priority_dc_id,
+            "priority_data_center_ids": priority_dc_ids,
             "image": config["image"],
             "preferred_data_center_id": priority_dc_id,
         }
