@@ -799,6 +799,8 @@ def runpod_status_summary(payload):
         'status', 'phase', 'message', 'last_error', 'desired_running',
         'pod_id', 'pod_name', 'endpoint', 'gpu_id', 'gpu_name',
         'data_center_id', 'cost_per_hour', 'runtime_status', 'updated_at',
+        'startup_started_at', 'startup_elapsed_seconds',
+        'startup_duration_seconds', 'created_at', 'ready_at', 'stopped_at',
     )
     return {key: payload.get(key) for key in keys if key in payload}
 

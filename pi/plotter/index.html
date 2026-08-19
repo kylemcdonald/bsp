@@ -192,7 +192,7 @@
 
     .runpod-startup-time {
       display: grid;
-      grid-template-columns: 110px 8ch minmax(80px, 1fr);
+      grid-template-columns: 130px 8ch minmax(80px, 1fr);
       gap: 10px;
       align-items: center;
       min-height: 40px;
@@ -203,6 +203,7 @@
 
     .runpod-startup-time-label {
       font-weight: 650;
+      white-space: nowrap;
     }
 
     .runpod-startup-time-value {
@@ -374,6 +375,10 @@
     let runpodOptionSignature = "";
     let latestRunpodStatus = null;
     let showAllRunpodRegions = false;
+    let lastRunpodStartupTime = "--:--:--";
+    let lastRunpodStartupTimeState = "not measured";
+    let lastRunpodMachineUptime = "--:--:--";
+    let lastRunpodMachineUptimeState = "not measured";
 
     function setText(id, text) {
       const element = document.getElementById(id);
@@ -389,6 +394,27 @@
       return [hours, minutes, remainder]
         .map((value) => String(value).padStart(2, "0"))
         .join(":");
+    }
+
+    function timestampMilliseconds(value) {
+      const parsed = Date.parse(value || "");
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    function runpodMachineUptimeSeconds(runpod) {
+      if (!runpod || !runpod.pod_id) return null;
+      const startTimes = [runpod.created_at, runpod.startup_started_at]
+        .map(timestampMilliseconds)
+        .filter((value) => Number.isFinite(value));
+      if (!startTimes.length) return null;
+
+      const startedAt = Math.max(...startTimes);
+      let endedAt = Date.now();
+      if (runpod.status === "stopped") {
+        const stoppedAt = timestampMilliseconds(runpod.stopped_at);
+        if (Number.isFinite(stoppedAt) && stoppedAt >= startedAt) endedAt = stoppedAt;
+      }
+      return Math.max(0, (endedAt - startedAt) / 1000);
     }
 
     async function getJson(url) {
@@ -575,18 +601,26 @@
       if (runpod.data_center_id) detailLines.push(`Region: ${runpod.data_center_id}`);
       if (Number.isFinite(runpod.cost_per_hour)) detailLines.push(`Rate: $${Number(runpod.cost_per_hour).toFixed(2)}/hr`);
       if (runpod.phase) detailLines.push(`Phase: ${runpod.phase}`);
-      let startupTime = "--:--:--";
-      let startupTimeState = "not measured";
       if (Number.isFinite(runpod.startup_duration_seconds)) {
-        startupTime = formatDurationClock(runpod.startup_duration_seconds);
-        startupTimeState = "total";
+        lastRunpodStartupTime = formatDurationClock(runpod.startup_duration_seconds);
+        lastRunpodStartupTimeState = "total";
       } else if (Number.isFinite(runpod.startup_elapsed_seconds)) {
-        startupTime = formatDurationClock(runpod.startup_elapsed_seconds);
-        startupTimeState = "elapsed";
+        lastRunpodStartupTime = formatDurationClock(runpod.startup_elapsed_seconds);
+        lastRunpodStartupTimeState = "elapsed";
+      }
+      const machineUptime = runpodMachineUptimeSeconds(runpod);
+      if (Number.isFinite(machineUptime)) {
+        lastRunpodMachineUptime = formatDurationClock(machineUptime);
+        lastRunpodMachineUptimeState = status === "stopped" ? "total" : "running";
+      } else if (Object.prototype.hasOwnProperty.call(runpod, "pod_id") && !runpod.pod_id) {
+        lastRunpodMachineUptime = "--:--:--";
+        lastRunpodMachineUptimeState = "not measured";
       }
       setText("runpod-details", detailLines.length ? detailLines.join("\n") : "No managed pod yet.");
-      setText("runpod-startup-time-value", startupTime);
-      setText("runpod-startup-time-state", startupTimeState);
+      setText("runpod-startup-time-value", lastRunpodStartupTime);
+      setText("runpod-startup-time-state", lastRunpodStartupTimeState);
+      setText("runpod-machine-uptime-value", lastRunpodMachineUptime);
+      setText("runpod-machine-uptime-state", lastRunpodMachineUptimeState);
       document.getElementById("runpod-start").disabled = status === "running";
       document.getElementById("runpod-stop").disabled = status === "stopped" && !runpod.desired_running;
     }
@@ -1121,6 +1155,11 @@
             <span class="runpod-startup-time-label">Startup time</span>
             <output class="runpod-startup-time-value" id="runpod-startup-time-value">--:--:--</output>
             <span class="runpod-startup-time-state" id="runpod-startup-time-state">not measured</span>
+          </div>
+          <div class="runpod-startup-time">
+            <span class="runpod-startup-time-label">Machine uptime</span>
+            <output class="runpod-startup-time-value" id="runpod-machine-uptime-value">--:--:--</output>
+            <span class="runpod-startup-time-state" id="runpod-machine-uptime-state">not measured</span>
           </div>
           <div class="actions">
             <button class="primary" id="runpod-start" onclick="runRunpodAction('start')">Start</button>
