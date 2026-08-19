@@ -55,7 +55,7 @@ class RunpodManagerTests(unittest.TestCase):
             {"id": "US-CA-2", "name": "US-CA-2", "location": "United States"},
             {"id": "US-GA-2", "name": "US-GA-2", "location": "United States"},
         ]
-        self.manager.config["allowed_gpu_ids"] = ["NVIDIA H100 80GB HBM3", "NVIDIA H200"]
+        self.manager.config["priority_gpu_ids"] = ["NVIDIA H100 80GB HBM3"]
         self.manager.config["deployment_region"] = "north-america"
         self.manager.config["priority_data_center_id"] = "US-CA-2"
         self.manager.config["priority_data_center_ids"] = ["US-CA-2"]
@@ -69,7 +69,7 @@ class RunpodManagerTests(unittest.TestCase):
         self.assertEqual(manager.state["machine_uptime_seconds"], 0.0)
         self.assertIsNone(manager.state["startup_started_at"])
 
-    def test_create_prefers_us_ca_2_and_first_allowed_card(self):
+    def test_create_prefers_us_ca_2_and_default_h100_priority(self):
         self.set_stock()
         self.manager.state["desired_running"] = True
         self.manager._refresh_options = mock.Mock()
@@ -108,6 +108,17 @@ class RunpodManagerTests(unittest.TestCase):
             ],
         )
 
+    def test_checked_card_is_prioritized_and_unchecked_cards_remain_allowed(self):
+        self.set_stock()
+        self.manager.config["priority_gpu_ids"] = ["NVIDIA H200"]
+        self.assertEqual(
+            self.manager._candidate_pairs()[:2],
+            [
+                ("NVIDIA H200", "US-CA-2"),
+                ("NVIDIA H100 80GB HBM3", "US-CA-2"),
+            ],
+        )
+
     def test_options_refresh_runs_during_first_five_minutes_of_boot(self):
         self.manager.last_options_refresh = 0
         self.manager._run_cli = mock.Mock(side_effect=(
@@ -134,9 +145,10 @@ class RunpodManagerTests(unittest.TestCase):
             {"US-CA-2": "Low"},
         )
         self.assertEqual(
-            [item["deployment_region"] for item in self.manager.data_center_options],
-            ["north-america", "europe", "asia-pacific"],
+            {item["deployment_region"] for item in self.manager.data_center_options},
+            {"north-america", "europe", "asia-pacific"},
         )
+        self.assertIn("US-CA-1", {item["id"] for item in self.manager.data_center_options})
 
     def test_no_selected_capacity_reports_blocked_without_create_call(self):
         self.manager.state["desired_running"] = True
@@ -145,7 +157,7 @@ class RunpodManagerTests(unittest.TestCase):
             "name": "H100 SXM",
             "data_center_availability": {"US-CA-2": "none"},
         }]
-        self.manager.config["allowed_gpu_ids"] = ["NVIDIA H100 80GB HBM3"]
+        self.manager.config["priority_gpu_ids"] = ["NVIDIA H100 80GB HBM3"]
         self.manager.config["deployment_region"] = "north-america"
         self.manager.config["priority_data_center_id"] = "US-CA-2"
         self.manager.config["priority_data_center_ids"] = ["US-CA-2"]
@@ -268,9 +280,9 @@ class RunpodManagerTests(unittest.TestCase):
         self.manager.reconcile()
         self.assertNotEqual(self.manager.state["stopped_at"], "2020-01-01T00:00:00Z")
 
-    def test_disallowed_stopped_pod_is_deleted_before_replacement(self):
+    def test_unchecked_card_stays_allowed_for_a_warm_start(self):
         self.set_stock()
-        self.manager.config["allowed_gpu_ids"] = ["NVIDIA H200"]
+        self.manager.config["priority_gpu_ids"] = ["NVIDIA H200"]
         self.manager.state.update({
             "pod_id": "oldpod",
             "gpu_id": "NVIDIA H100 80GB HBM3",
@@ -285,57 +297,70 @@ class RunpodManagerTests(unittest.TestCase):
             calls.append(args)
             if args[:2] == ("pod", "get"):
                 return {"id": "oldpod", "runtimeStatus": "stopped"}
-            if args[:2] == ("pod", "delete"):
+            if args[:2] == ("pod", "start"):
                 return {}
             raise AssertionError(args)
 
         self.manager._run_cli = run_cli
         self.manager.reconcile()
-        self.assertTrue(any(call[:2] == ("pod", "delete") for call in calls))
-        self.assertIsNone(self.manager.state["pod_id"])
+        self.assertTrue(any(call[:2] == ("pod", "start") for call in calls))
+        self.assertFalse(any(call[:2] == ("pod", "delete") for call in calls))
+        self.assertEqual(self.manager.state["pod_id"], "oldpod")
 
-    def test_config_requires_a_card_and_valid_region_selections(self):
-        with self.assertRaisesRegex(ValueError, "at least one GPU"):
-            self.manager.update_config({
-                "allowed_gpu_ids": [],
-                "deployment_region": "north-america",
-                "priority_data_center_ids": ["US-CA-2"],
-            })
+    def test_config_allows_no_card_priority_and_validates_region_selections(self):
+        status = self.manager.update_config({
+            "priority_gpu_ids": [],
+            "deployment_region": "north-america",
+            "priority_data_center_ids": ["US-CA-2"],
+        })
+        self.assertEqual(status["config"]["priority_gpu_ids"], [])
+        self.assertEqual(
+            status["config"]["allowed_gpu_ids"],
+            [item["id"] for item in module.DEFAULT_GPU_OPTIONS],
+        )
         with self.assertRaisesRegex(ValueError, "supported deployment region"):
             self.manager.update_config({
-                "allowed_gpu_ids": ["NVIDIA H100 80GB HBM3"],
+                "priority_gpu_ids": ["NVIDIA H100 80GB HBM3"],
                 "deployment_region": "south-america",
                 "priority_data_center_ids": ["US-CA-2"],
             })
         with self.assertRaisesRegex(ValueError, "priority data centers"):
             self.manager.update_config({
-                "allowed_gpu_ids": ["NVIDIA H100 80GB HBM3"],
+                "priority_gpu_ids": ["NVIDIA H100 80GB HBM3"],
                 "deployment_region": "north-america",
                 "priority_data_center_ids": ["EU-RO-1"],
             })
         with self.assertRaisesRegex(ValueError, "at least one priority"):
             self.manager.update_config({
-                "allowed_gpu_ids": ["NVIDIA H100 80GB HBM3"],
+                "priority_gpu_ids": ["NVIDIA H100 80GB HBM3"],
                 "deployment_region": "north-america",
                 "priority_data_center_ids": [],
+            })
+        with self.assertRaisesRegex(ValueError, "unsupported GPU"):
+            self.manager.update_config({
+                "priority_gpu_ids": ["NVIDIA A100"],
+                "deployment_region": "north-america",
+                "priority_data_center_ids": ["US-CA-2"],
             })
 
     def test_config_saves_priority_and_derives_deployment_data_centers(self):
         self.set_stock()
         status = self.manager.update_config({
-            "allowed_gpu_ids": ["NVIDIA H200"],
+            "priority_gpu_ids": ["NVIDIA H200"],
             "deployment_region": "north-america",
             "priority_data_center_ids": ["US-GA-2", "US-CA-2"],
         })
+        self.assertEqual(status["config"]["priority_gpu_ids"], ["NVIDIA H200"])
         self.assertEqual(status["config"]["priority_data_center_id"], "US-GA-2")
         self.assertEqual(
             status["config"]["priority_data_center_ids"],
             ["US-GA-2", "US-CA-2"],
         )
         self.assertEqual(
-            status["config"]["allowed_data_center_ids"],
+            status["config"]["allowed_data_center_ids"][:2],
             ["US-CA-2", "US-GA-2"],
         )
+        self.assertIn("US-CA-1", status["config"]["allowed_data_center_ids"])
 
     def test_old_region_config_migrates_to_priority_selector(self):
         with tempfile.TemporaryDirectory() as state_dir:
@@ -348,6 +373,39 @@ class RunpodManagerTests(unittest.TestCase):
         self.assertEqual(manager.config["deployment_region"], "north-america")
         self.assertEqual(manager.config["priority_data_center_id"], "US-GA-2")
         self.assertEqual(manager.config["priority_data_center_ids"], ["US-GA-2"])
+        self.assertEqual(manager.config["priority_gpu_ids"], ["NVIDIA H100 80GB HBM3"])
+        self.assertEqual(
+            manager.config["allowed_gpu_ids"],
+            [item["id"] for item in module.DEFAULT_GPU_OPTIONS],
+        )
+
+    def test_legacy_card_subset_becomes_priority_while_all_cards_become_allowed(self):
+        with tempfile.TemporaryDirectory() as state_dir:
+            state_path = Path(state_dir)
+            module.atomic_write_json(state_path / "config.json", {
+                "allowed_gpu_ids": ["NVIDIA H100 80GB HBM3", "NVIDIA H100 NVL"],
+            })
+            manager = module.RunpodManager(state_dir=state_dir, autostart=False)
+        self.assertEqual(
+            manager.config["priority_gpu_ids"],
+            ["NVIDIA H100 80GB HBM3", "NVIDIA H100 NVL"],
+        )
+        self.assertEqual(
+            manager.config["allowed_gpu_ids"],
+            [item["id"] for item in module.DEFAULT_GPU_OPTIONS],
+        )
+
+    def test_unavailable_priority_data_center_remains_saved(self):
+        self.set_stock()
+        status = self.manager.update_config({
+            "priority_gpu_ids": ["NVIDIA H100 80GB HBM3"],
+            "deployment_region": "north-america",
+            "priority_data_center_ids": ["US-CA-1", "US-CA-2"],
+        })
+        self.assertEqual(
+            status["config"]["priority_data_center_ids"],
+            ["US-CA-1", "US-CA-2"],
+        )
 
     def test_europe_deployment_only_uses_european_data_centers(self):
         self.manager.data_center_options = [
@@ -364,7 +422,7 @@ class RunpodManagerTests(unittest.TestCase):
             },
         }]
         self.manager.config.update({
-            "allowed_gpu_ids": ["NVIDIA H100 80GB HBM3"],
+            "priority_gpu_ids": ["NVIDIA H100 80GB HBM3"],
             "deployment_region": "europe",
             "priority_data_center_ids": ["EUR-NO-2"],
         })

@@ -11,18 +11,23 @@ its controls into `http://bsp-install.local:8080/`.
 
 Persistent configuration and lifecycle state live outside the checkout in
 `/var/lib/bsp-runpod/`. The UI stores the deployment geography, priority data
-centers, and selected GPU cards in `config.json`. North America, Europe, and
+centers, and priority GPU cards in `config.json`. North America, Europe, and
 Asia Pacific are available deployment geographies. North America defaults to
 `US-CA-2` as its priority; multiple data centers can be checked and are tried
-before other data centers in the deployment geography. The card selector only
-shows supported cards with current stock in at least one checked priority data
-center, along with the stock status at each matching center.
-Priority data centers without supported-card stock are hidden by default; the
-UI toggle can show all regions and hide unavailable regions again.
-Selections apply immediately to the next new pod. If a stopped managed pod no
-longer uses an allowed card or deployment geography, the manager deletes that
-stopped pod and creates a replacement when Start is requested or the Pi next
-boots.
+before other data centers in the deployment geography. Checked data centers
+remain saved when their supported cards are temporarily unavailable. They are
+hidden by default, and the UI toggle can show them checked again.
+
+All listed H100, H200, and B200 variants are always eligible. GPU checkboxes
+only control which cards are tried first; unchecked cards remain automatic
+fallbacks. H100 SXM is the default card priority. The selector only shows cards
+with current stock in at least one checked priority data center, along with the
+stock status at each matching center. Hidden card priorities also remain saved.
+Selections apply immediately to the next new pod. Changing card priority does
+not replace an existing stopped pod because all supported cards remain allowed.
+If a stopped managed pod is outside the selected deployment geography, the
+manager deletes it and creates a replacement when Start is requested or the Pi
+next boots.
 
 The UI reports elapsed startup time from the boot/manual Start request until
 `bsp-convert` confirms its model is loaded, then keeps the completed duration
@@ -31,7 +36,8 @@ visible.
 Defaults:
 
 - image: `kylemcdonald/bsp-convert:runpod-20260616-1386277`
-- cards: H100 SXM/NVL/PCIe, H200 SXM/NVL, and B200
+- allowed cards: H100 SXM/NVL/PCIe, H200 SXM/NVL, and B200
+- priority card: H100 SXM by default; other allowed cards are fallbacks
 - deployment geography: North America by default, with Europe and Asia Pacific
   also available
 - priority data centers: `US-CA-2` by default; other centers in the selected
