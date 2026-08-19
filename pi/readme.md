@@ -239,23 +239,27 @@ Button:
 
 ## Button LED Feedback
 
-The button service owns LED feedback. Error patterns repeat until the underlying
+The button service owns LED feedback. Patterns repeat until the underlying
 condition clears:
 
 - network disconnected: one `100ms` flash, then `1000ms` off
 - camera disconnected: two `100ms` flashes with `100ms` off between them, then `1000ms` off
 - plotter error: three `100ms` flashes with `100ms` off between them, then `1000ms` off
+- RunPod processor starting: four `100ms` flashes with `100ms` off between them, then `1000ms` off
 
-The button service checks for a local default route, whether it is provided by
-Ethernet or Wi-Fi, then probes the configured processor endpoint from
-`plotter.service` status. A missing camera status response is treated as camera
-disconnected. A missing plotter status response or plotter `ERROR` state is
-treated as plotter error.
+The button service consumes the plotter's aggregated `GET /status` response,
+including its nested RunPod manager status, rather than polling RunPod itself.
+It checks for a local default route, whether it is provided by Ethernet or
+Wi-Fi, then probes the configured processor endpoint. Endpoint unreachability
+is expected and ignored while the RunPod manager reports `starting`, but a
+missing default route still reports a network error. A missing camera status
+response is treated as camera disconnected. A missing plotter status response
+or plotter `ERROR` state is treated as plotter error.
 
-When more than one error is present, the LED reports the first condition in this
-order: network, camera, plotter. During a normal capture, the LED blinks at
-`250ms` on, `250ms` off. During a restart-armed button hold, that is overridden
-by the fast `200ms` on, `200ms` off pattern.
+When more than one condition is present, the LED reports the first one in this
+order: network, camera, plotter, RunPod starting. During a normal capture, the
+LED blinks at `250ms` on, `250ms` off. During a restart-armed button hold, that
+is overridden by the fast `200ms` on, `200ms` off pattern.
 
 ## Plotter State Changes
 

@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 from gpiozero import InputDevice, LED
 import requests
 
+from led_feedback import PATTERNS, led_pattern_on, service_feedback_pattern
+
 # RPI enumeration is:
 # pin 5 & 6 are used for the button (3 & ground)
 # pin 7 & 9 are used for the LED (4 & ground)
@@ -29,6 +31,7 @@ last_camera_poll = 0
 last_network_poll = 0
 network_ready = False
 processor_endpoint = None
+runpod_status = None
 led_pattern_name = None
 led_pattern_started = 0
 restart_ready_logged = False
@@ -39,14 +42,6 @@ camera_status_url = 'http://localhost:8081/status'
 network_probe_timeout = 0.5
 restart_hold_seconds = 5
 shutdown_hold_seconds = 10
-
-PATTERNS = {
-    'capturing': {'pulses': None, 'on': 0.25, 'off': 0.25, 'pause': 0},
-    'network_error': {'pulses': 1, 'on': 0.1, 'off': 0.1, 'pause': 1.0},
-    'camera_error': {'pulses': 2, 'on': 0.1, 'off': 0.1, 'pause': 1.0},
-    'plotter_error': {'pulses': 3, 'on': 0.1, 'off': 0.1, 'pause': 1.0},
-    'restart_ready': {'pulses': None, 'on': 0.2, 'off': 0.2, 'pause': 0},
-}
 
 led = LED(led_pin)
 led.off()
@@ -69,7 +64,7 @@ def get(url):
     get_json(url)
 
 def apply_status(payload):
-    global button_light_enabled, plotter_last_error, plotter_ready, plotter_state, processor_endpoint
+    global button_light_enabled, plotter_last_error, plotter_ready, plotter_state, processor_endpoint, runpod_status
     if not isinstance(payload, dict):
         plotter_ready = False
         return
@@ -78,6 +73,8 @@ def apply_status(payload):
     plotter_ready = bool(payload.get('connected', plotter_ready))
     processor_endpoint = payload.get('processor_endpoint', processor_endpoint)
     button_light_enabled = bool(payload.get('button_light', True))
+    runpod = payload.get('runpod')
+    runpod_status = runpod.get('status') if isinstance(runpod, dict) else None
 
 def services_ready():
     return network_ready and plotter_ready and camera_ready
@@ -109,31 +106,18 @@ def processor_reachable():
 def check_network():
     if not has_default_route():
         return False
+    if runpod_status == 'starting':
+        return True
     return processor_reachable()
 
 def current_error_pattern():
-    if not network_ready:
-        return 'network_error'
-    if not camera_ready:
-        return 'camera_error'
-    if not plotter_ready or plotter_state == 'ERROR':
-        return 'plotter_error'
-    return None
-
-def led_pattern_on(pattern, elapsed):
-    pulses = pattern['pulses']
-    on_duration = pattern['on']
-    off_duration = pattern['off']
-    if pulses is None:
-        cycle = on_duration + off_duration
-        return elapsed % cycle < on_duration
-    active_duration = pulses * on_duration + (pulses - 1) * off_duration
-    cycle = active_duration + pattern['pause']
-    pos = elapsed % cycle
-    if pos >= active_duration:
-        return False
-    pulse_span = on_duration + off_duration
-    return pos % pulse_span < on_duration
+    return service_feedback_pattern(
+        network_ready,
+        camera_ready,
+        plotter_ready,
+        plotter_state,
+        runpod_status,
+    )
 
 def update_led(now):
     global led_pattern_name, led_pattern_started
@@ -152,13 +136,16 @@ def update_led(now):
         if pattern_name != led_pattern_name:
             led_pattern_name = pattern_name
             led_pattern_started = now
+            print(f'button> LED pattern {pattern_name}', flush=True)
         if led_pattern_on(PATTERNS[pattern_name], now - led_pattern_started):
             led.on()
         else:
             led.off()
         return
 
-    led_pattern_name = None
+    if led_pattern_name is not None:
+        print('button> LED pattern cleared', flush=True)
+        led_pattern_name = None
     if button_light_enabled:
         led.on()
     else:
