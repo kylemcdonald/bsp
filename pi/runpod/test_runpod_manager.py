@@ -67,6 +67,7 @@ class RunpodManagerTests(unittest.TestCase):
         self.assertEqual(manager.state["status"], "starting")
         self.assertEqual(manager.state["phase"], "boot")
         self.assertEqual(manager.state["machine_uptime_seconds"], 0.0)
+        self.assertIsNone(manager.state["startup_started_at"])
 
     def test_create_prefers_us_ca_2_and_first_allowed_card(self):
         self.set_stock()
@@ -89,6 +90,8 @@ class RunpodManagerTests(unittest.TestCase):
         self.assertEqual(create[create.index("--data-center-ids") + 1], "US-CA-2")
         self.assertEqual(create[create.index("--gpu-id") + 1], "NVIDIA H100 80GB HBM3")
         self.assertEqual(self.manager.state["pod_id"], "pod123")
+        self.assertEqual(self.manager.state["startup_kind"], "cold")
+        self.assertIsNotNone(self.manager.state["startup_started_at"])
         self.assertEqual(
             self.manager.state["endpoint"],
             "https://pod123-8787.proxy.runpod.net/api/process",
@@ -211,13 +214,47 @@ class RunpodManagerTests(unittest.TestCase):
             raise AssertionError(args)
 
         self.manager._run_cli = run_cli
-        self.manager.request_stop()
-        self.manager.reconcile()
+        with mock.patch.object(module.time, "monotonic", return_value=100.0):
+            self.manager.request_stop()
+        with mock.patch.object(module.time, "monotonic", return_value=101.0):
+            self.manager.reconcile()
         self.assertEqual(self.manager.state["status"], "stopping")
         self.assertTrue(any(call[:2] == ("pod", "stop") for call in calls))
-        self.manager.reconcile()
+        with mock.patch.object(module.time, "monotonic", return_value=108.0):
+            self.manager.reconcile()
         self.assertEqual(self.manager.state["status"], "stopped")
         self.assertIsNotNone(self.manager.state["stopped_at"])
+        self.assertEqual(self.manager.state["stop_duration_seconds"], 8.0)
+
+    def test_existing_stopped_pod_start_is_warm(self):
+        self.manager.state.update({
+            "pod_id": "pod123",
+            "desired_running": True,
+            "status": "stopped",
+        })
+        self.manager._refresh_options = mock.Mock()
+        calls = []
+
+        def run_cli(*args, **kwargs):
+            calls.append(args)
+            if args[:2] == ("pod", "get"):
+                return {"id": "pod123", "runtimeStatus": "stopped"}
+            if args[:2] == ("pod", "start"):
+                return {}
+            raise AssertionError(args)
+
+        self.manager._run_cli = run_cli
+        with mock.patch.object(module.time, "monotonic", return_value=100.0), mock.patch.object(
+            module,
+            "utc_now",
+            return_value="2026-08-19T10:00:00Z",
+        ):
+            self.manager.reconcile()
+        self.assertEqual(self.manager.state["startup_kind"], "warm")
+        self.assertEqual(self.manager.state["startup_started_at"], "2026-08-19T10:00:00Z")
+        self.assertTrue(any(call[:2] == ("pod", "start") for call in calls))
+        with mock.patch.object(module.time, "monotonic", return_value=112.0):
+            self.assertEqual(self.manager.public_status()["startup_elapsed_seconds"], 12.0)
 
     def test_repeated_stop_refreshes_timestamp_after_a_new_run(self):
         self.manager.state.update({

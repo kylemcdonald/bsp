@@ -221,6 +221,7 @@ class RunpodManager:
         self.start_request_at = 0.0
         self.stop_request_at = 0.0
         self.startup_started_monotonic = None
+        self.stop_started_monotonic = None
         self.gpu_options = copy.deepcopy(DEFAULT_GPU_OPTIONS)
         self.data_center_options = copy.deepcopy(DEFAULT_DATA_CENTER_OPTIONS)
 
@@ -258,21 +259,23 @@ class RunpodManager:
         self.state.setdefault("message", "RunPod processor is stopped")
         self.state.setdefault("last_error", None)
         self.state.setdefault("desired_running", False)
+        self.state.setdefault("startup_kind", None)
         self.state.setdefault("startup_started_at", None)
         self.state.setdefault("startup_duration_seconds", None)
+        self.state.setdefault("stop_started_at", None)
+        self.state.setdefault("stop_duration_seconds", None)
         self.state.setdefault("updated_at", utc_now())
         self.state.setdefault("last_event", None)
         self.state.setdefault("boot_id", self._boot_id())
         if self.autostart:
-            self.startup_started_monotonic = time.monotonic()
-            startup_started_at = utc_now()
             self.state["desired_running"] = True
             self.state["status"] = "starting"
             self.state["phase"] = "boot"
             self.state["message"] = "Waiting to start the RunPod processor"
             self.state["ready_at"] = None
             self.state["stopped_at"] = None
-            self.state["startup_started_at"] = startup_started_at
+            self.state["startup_kind"] = None
+            self.state["startup_started_at"] = None
             self.state["startup_duration_seconds"] = None
             self.state["machine_uptime_seconds"] = 0.0
         self._save_state()
@@ -486,12 +489,12 @@ class RunpodManager:
         priority_ids = self._priority_data_center_ids()
         return priority_ids[0] if priority_ids else None
 
-    def _ensure_startup_timer(self):
-        if self.startup_started_monotonic is None:
-            self.startup_started_monotonic = time.monotonic()
-        if self.state.get("startup_started_at"):
+    def _begin_startup_timer(self, startup_kind, force=False):
+        if self.startup_started_monotonic is not None and not force:
             return
+        self.startup_started_monotonic = time.monotonic()
         self._update_state(
+            startup_kind=startup_kind,
             startup_started_at=utc_now(),
             startup_duration_seconds=None,
             ready_at=None,
@@ -501,6 +504,20 @@ class RunpodManager:
         if self.startup_started_monotonic is not None:
             return round(max(0.0, time.monotonic() - self.startup_started_monotonic), 1)
         return elapsed_seconds(self.state.get("startup_started_at"), ended_at)
+
+    def _begin_stop_timer(self):
+        if self.stop_started_monotonic is not None:
+            return
+        self.stop_started_monotonic = time.monotonic()
+        self._update_state(
+            stop_started_at=utc_now(),
+            stop_duration_seconds=None,
+        )
+
+    def _stop_elapsed_seconds(self, ended_at=None):
+        if self.stop_started_monotonic is not None:
+            return round(max(0.0, time.monotonic() - self.stop_started_monotonic), 1)
+        return elapsed_seconds(self.state.get("stop_started_at"), ended_at)
 
     def _pod_details(self, pod_id):
         return self._run_cli("pod", "get", pod_id, "--include-machine", "-o", "json")
@@ -548,7 +565,6 @@ class RunpodManager:
         return candidates
 
     def _create_pod(self):
-        self._ensure_startup_timer()
         self._refresh_options(force=True)
         if not self.config["allowed_gpu_ids"]:
             raise RunpodCLIError("No RunPod GPU cards are selected")
@@ -559,6 +575,7 @@ class RunpodManager:
             raise RunpodCLIError(
                 "No selected H100/H200/B200 card currently has stock in the selected deployment region"
             )
+        self._begin_startup_timer("cold", force=True)
 
         environment = json.dumps({
             "QWEN_PARKING_MODE": "all_cuda",
@@ -643,10 +660,10 @@ class RunpodManager:
         )
 
     def _start_existing_pod(self, pod_id):
-        self._ensure_startup_timer()
         if time.monotonic() - self.start_request_at < 20:
             return
         self.start_request_at = time.monotonic()
+        self._begin_startup_timer("warm")
         self._update_state(
             status="starting",
             phase="starting",
@@ -660,6 +677,7 @@ class RunpodManager:
         if time.monotonic() - self.stop_request_at < 10:
             return
         self.stop_request_at = time.monotonic()
+        self._begin_stop_timer()
         self._update_state(
             status="stopping",
             phase="stopping",
@@ -729,6 +747,7 @@ class RunpodManager:
         ready_at = self.state.get("ready_at")
         startup_duration = self.state.get("startup_duration_seconds")
         if first_running:
+            self._begin_startup_timer(self.state.get("startup_kind") or "warm")
             ready_at = utc_now()
             startup_duration = self._startup_elapsed_seconds(ready_at)
         self._update_state(
@@ -744,6 +763,7 @@ class RunpodManager:
                 "processor_ready",
                 f"bsp-convert is ready at {self.state.get('endpoint')}",
                 pod_id=self.state.get("pod_id"),
+                startup_kind=self.state.get("startup_kind"),
                 startup_duration_seconds=startup_duration,
             )
         return True
@@ -830,15 +850,26 @@ class RunpodManager:
         if not desired_running:
             if runtime in ("stopped", "exited"):
                 first_stopped = self.state.get("status") != "stopped"
+                stopped_at = utc_now() if first_stopped else self.state.get("stopped_at")
+                stop_duration = self.state.get("stop_duration_seconds")
+                if first_stopped:
+                    stop_duration = self._stop_elapsed_seconds(stopped_at)
                 self._update_state(
                     status="stopped",
                     phase="idle",
                     message="RunPod processor is stopped",
                     last_error=None,
-                    stopped_at=utc_now() if first_stopped else self.state.get("stopped_at"),
+                    stopped_at=stopped_at,
+                    stop_duration_seconds=stop_duration,
                 )
                 if first_stopped:
-                    self._event("pod_stopped", f"pod {pod_id} is stopped", pod_id=pod_id)
+                    self._event(
+                        "pod_stopped",
+                        f"pod {pod_id} is stopped",
+                        pod_id=pod_id,
+                        stop_duration_seconds=stop_duration,
+                    )
+                    self.stop_started_monotonic = None
             else:
                 self._stop_existing_pod(pod_id)
             return
@@ -925,11 +956,10 @@ class RunpodManager:
         self.worker.start()
 
     def request_start(self):
-        if self.state.get("desired_running") and self.state.get("status") == "running":
+        if self.state.get("desired_running") and self.state.get("status") in ("starting", "running"):
             return
         self.next_retry_at = 0
-        self.startup_started_monotonic = time.monotonic()
-        startup_started_at = utc_now()
+        self.startup_started_monotonic = None
         self._update_state(
             desired_running=True,
             status="starting",
@@ -938,7 +968,8 @@ class RunpodManager:
             last_error=None,
             stopped_at=None,
             ready_at=None,
-            startup_started_at=startup_started_at,
+            startup_kind=None,
+            startup_started_at=None,
             startup_duration_seconds=None,
             machine_uptime_seconds=0.0,
         )
@@ -947,6 +978,13 @@ class RunpodManager:
 
     def request_stop(self, reason="manual"):
         self.startup_started_monotonic = None
+        if (
+            self.state.get("pod_id")
+            and self.state.get("status") != "stopped"
+            and self.state.get("desired_running")
+        ):
+            self.stop_started_monotonic = None
+            self._begin_stop_timer()
         self._update_state(
             desired_running=False,
             status="stopping" if self.state.get("pod_id") else "stopped",

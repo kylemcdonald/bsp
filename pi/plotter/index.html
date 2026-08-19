@@ -377,6 +377,7 @@
     let showAllRunpodRegions = false;
     let lastRunpodStartupTime = "--:--:--";
     let lastRunpodStartupTimeState = "not measured";
+    let lastRunpodStartupKind = "";
     let lastRunpodMachineUptime = "--:--:--";
     let lastRunpodMachineUptimeState = "not measured";
 
@@ -609,12 +610,15 @@
       if (runpod.data_center_id) detailLines.push(`Region: ${runpod.data_center_id}`);
       if (Number.isFinite(runpod.cost_per_hour)) detailLines.push(`Rate: $${Number(runpod.cost_per_hour).toFixed(2)}/hr`);
       if (runpod.phase) detailLines.push(`Phase: ${runpod.phase}`);
+      if (runpod.startup_kind === "cold" || runpod.startup_kind === "warm") {
+        lastRunpodStartupKind = runpod.startup_kind;
+      }
       if (Number.isFinite(runpod.startup_duration_seconds)) {
         lastRunpodStartupTime = formatDurationClock(runpod.startup_duration_seconds);
-        lastRunpodStartupTimeState = "total";
+        lastRunpodStartupTimeState = [lastRunpodStartupKind, "total"].filter(Boolean).join(" ");
       } else if (Number.isFinite(runpod.startup_elapsed_seconds)) {
         lastRunpodStartupTime = formatDurationClock(runpod.startup_elapsed_seconds);
-        lastRunpodStartupTimeState = "elapsed";
+        lastRunpodStartupTimeState = [lastRunpodStartupKind, "elapsed"].filter(Boolean).join(" ");
       }
       const machineUptime = runpodMachineUptimeSeconds(runpod);
       if (Number.isFinite(machineUptime)) {

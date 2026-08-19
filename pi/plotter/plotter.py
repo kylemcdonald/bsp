@@ -846,7 +846,7 @@ def runpod_status_summary(payload):
         'pod_id', 'pod_name', 'endpoint', 'gpu_id', 'gpu_name',
         'data_center_id', 'cost_per_hour', 'runtime_status',
         'machine_uptime_seconds', 'updated_at',
-        'startup_started_at', 'startup_elapsed_seconds',
+        'startup_kind', 'startup_started_at', 'startup_elapsed_seconds',
         'startup_duration_seconds', 'created_at', 'ready_at', 'stopped_at',
     )
     corrected = corrected_runpod_startup_timing(payload)
