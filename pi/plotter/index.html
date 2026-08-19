@@ -126,7 +126,8 @@
 	      height: 24px;
 	    }
 
-	    input[type="url"] {
+	    input[type="url"],
+	    select {
 	      width: 100%;
 	      min-height: 44px;
 	      border: 1px solid #999;
@@ -136,6 +137,18 @@
 	      font: inherit;
 	      padding: 10px 12px;
 	    }
+
+    .select-row {
+      display: grid;
+      grid-template-columns: minmax(170px, 1fr) minmax(220px, 2fr);
+      gap: 10px;
+      align-items: center;
+    }
+
+    .field-help {
+      color: #555;
+      font-size: 13px;
+    }
 
     input[readonly] {
       background: #ecece7;
@@ -301,7 +314,8 @@
 
 	      .toggle-row,
 	      .slider-row,
-	      .endpoint-row {
+	      .endpoint-row,
+        .select-row {
 	        grid-template-columns: 1fr;
 	      }
 
@@ -316,9 +330,20 @@
     let pendingPathPreviewed = false;
     let runpodConfigDirty = false;
     let runpodOptionSignature = "";
+    let latestRunpodStatus = null;
 
     function setText(id, text) {
       document.getElementById(id).innerText = text;
+    }
+
+    function formatDuration(totalSeconds) {
+      const seconds = Math.max(0, Math.round(Number(totalSeconds) || 0));
+      if (seconds < 60) return `${seconds}s`;
+      const minutes = Math.floor(seconds / 60);
+      const remainder = seconds % 60;
+      if (minutes < 60) return `${minutes}m ${remainder}s`;
+      const hours = Math.floor(minutes / 60);
+      return `${hours}h ${minutes % 60}m ${remainder}s`;
     }
 
     async function getJson(url) {
@@ -503,6 +528,11 @@
       if (runpod.data_center_id) detailLines.push(`Region: ${runpod.data_center_id}`);
       if (Number.isFinite(runpod.cost_per_hour)) detailLines.push(`Rate: $${Number(runpod.cost_per_hour).toFixed(2)}/hr`);
       if (runpod.phase) detailLines.push(`Phase: ${runpod.phase}`);
+      if (Number.isFinite(runpod.startup_duration_seconds)) {
+        detailLines.push(`Startup time: ${formatDuration(runpod.startup_duration_seconds)}`);
+      } else if (Number.isFinite(runpod.startup_elapsed_seconds)) {
+        detailLines.push(`Startup time: ${formatDuration(runpod.startup_elapsed_seconds)} elapsed`);
+      }
       setText("runpod-details", detailLines.length ? detailLines.join("\n") : "No managed pod yet.");
       document.getElementById("runpod-start").disabled = status === "running";
       document.getElementById("runpod-stop").disabled = status === "stopped" && !runpod.desired_running;
@@ -522,7 +552,7 @@
       checkbox.checked = checked;
       checkbox.addEventListener("change", () => {
         runpodConfigDirty = true;
-        setText("runpod-config-status", "Unsaved selection changes.");
+        setText("runpod-config-status", "Unsaved deployment preference changes.");
       });
       const text = document.createElement("span");
       text.innerText = label;
@@ -530,44 +560,98 @@
       container.append(row);
     }
 
+    function populateRunpodSelect(select, options, selectedValue, labelFor) {
+      select.replaceChildren();
+      options.forEach((item) => {
+        const option = document.createElement("option");
+        option.value = item.id;
+        option.innerText = labelFor(item);
+        select.append(option);
+      });
+      if (options.some((item) => item.id === selectedValue)) {
+        select.value = selectedValue;
+      }
+    }
+
+    function formatRunpodAvailability(stock) {
+      const normalized = String(stock || "none").trim().toLowerCase();
+      if (["", "none", "unavailable", "sold out"].includes(normalized)) {
+        return "Unavailable";
+      }
+      return String(stock);
+    }
+
+    function runpodRegionSelectionChanged() {
+      runpodConfigDirty = true;
+      runpodOptionSignature = "";
+      setText("runpod-config-status", "Unsaved deployment preference changes.");
+      if (latestRunpodStatus) renderRunpodOptions(latestRunpodStatus);
+    }
+
     function renderRunpodOptions(runpod) {
+      latestRunpodStatus = runpod;
+      const config = runpod.config || {};
       const gpuOptions = Array.isArray(runpod.gpu_options) ? runpod.gpu_options : [];
       const regionOptions = Array.isArray(runpod.data_center_options) ? runpod.data_center_options : [];
-      const configuredRegions = new Set((runpod.config && runpod.config.allowed_data_center_ids) || []);
+      const deploymentOptions = Array.isArray(runpod.deployment_region_options)
+        ? runpod.deployment_region_options
+        : [{ id: "north-america", name: "North America" }];
       const signature = JSON.stringify([
+        deploymentOptions,
         gpuOptions.map((option) => [
           option.id,
           option.memory_gb,
           option.secure_price_per_hour,
           option.data_center_availability,
         ]),
-        regionOptions.map((option) => option.id),
-        Array.from(configuredRegions),
+        regionOptions.map((option) => [option.id, option.location, option.deployment_region]),
+        runpodConfigDirty ? null : [
+          config.allowed_gpu_ids,
+          config.deployment_region,
+          config.priority_data_center_id,
+        ],
       ]);
       if (signature !== runpodOptionSignature) {
-        const selectedGpus = runpodConfigDirty
+        const deploymentSelect = document.getElementById("runpod-deployment-region");
+        const prioritySelect = document.getElementById("runpod-priority-region");
+        const existingGpuInputs = document.querySelectorAll('input[name="runpod-gpu"]');
+        const selectedGpus = runpodConfigDirty && existingGpuInputs.length
           ? new Set(selectedRunpodValues("runpod-gpu"))
-          : new Set((runpod.config && runpod.config.allowed_gpu_ids) || []);
-        const selectedRegions = runpodConfigDirty
-          ? new Set(selectedRunpodValues("runpod-region"))
-          : new Set((runpod.config && runpod.config.allowed_data_center_ids) || []);
+          : new Set(config.allowed_gpu_ids || []);
+        const selectedDeployment = runpodConfigDirty && deploymentSelect.value
+          ? deploymentSelect.value
+          : (config.deployment_region || deploymentOptions[0]?.id || "");
+        const selectedPriority = runpodConfigDirty && prioritySelect.value
+          ? prioritySelect.value
+          : (config.priority_data_center_id || config.preferred_data_center_id || "");
+
+        populateRunpodSelect(
+          deploymentSelect,
+          deploymentOptions,
+          selectedDeployment,
+          (option) => option.name || option.id,
+        );
+        const deploymentDataCenters = regionOptions.filter((option) => (
+          !option.deployment_region || option.deployment_region === deploymentSelect.value
+        ));
+        populateRunpodSelect(
+          prioritySelect,
+          deploymentDataCenters,
+          selectedPriority,
+          (option) => `${option.id} — ${option.location || "North America"}`,
+        );
+        deploymentSelect.onchange = runpodRegionSelectionChanged;
+        prioritySelect.onchange = runpodRegionSelectionChanged;
+
         const gpuContainer = document.getElementById("runpod-card-options");
-        const regionContainer = document.getElementById("runpod-region-options");
         gpuContainer.replaceChildren();
-        regionContainer.replaceChildren();
+        const priorityDataCenter = prioritySelect.value;
         gpuOptions.forEach((option) => {
           const details = [];
           if (Number.isFinite(option.memory_gb)) details.push(`${option.memory_gb} GB`);
           if (Number.isFinite(option.secure_price_per_hour)) details.push(`$${Number(option.secure_price_per_hour).toFixed(2)}/hr`);
           const availability = option.data_center_availability || {};
-          const stockedRegions = Object.entries(availability).filter(([region, stock]) => (
-            configuredRegions.has(region)
-            && stock
-            && !["none", "unavailable", "sold out"].includes(String(stock).toLowerCase())
-          )).length;
-          details.push(stockedRegions
-            ? `${stockedRegions} allowed region${stockedRegions === 1 ? "" : "s"} in stock`
-            : "no allowed region currently in stock");
+          details.push(`${priorityDataCenter}: ${formatRunpodAvailability(availability[priorityDataCenter])}`);
           addRunpodOption(
             gpuContainer,
             "runpod-gpu",
@@ -576,27 +660,11 @@
             selectedGpus.has(option.id),
           );
         });
-        regionOptions.forEach((option) => {
-          const suffix = option.id === "US-CA-2" ? " — preferred" : "";
-          addRunpodOption(
-            regionContainer,
-            "runpod-region",
-            option.id,
-            `${option.id} (${option.location || "North America"})${suffix}`,
-            selectedRegions.has(option.id),
-          );
-        });
+        setText(
+          "runpod-region-help",
+          `${priorityDataCenter || "The selected data center"} is checked first. Other data centers in ${deploymentSelect.options[deploymentSelect.selectedIndex]?.text || "the deployment region"} are automatic fallbacks. Card availability below is for ${priorityDataCenter || "the priority data center"}.`,
+        );
         runpodOptionSignature = signature;
-      }
-      if (!runpodConfigDirty && runpod.config) {
-        const selectedGpus = new Set(runpod.config.allowed_gpu_ids || []);
-        const selectedRegions = new Set(runpod.config.allowed_data_center_ids || []);
-        document.querySelectorAll('input[name="runpod-gpu"]').forEach((input) => {
-          input.checked = selectedGpus.has(input.value);
-        });
-        document.querySelectorAll('input[name="runpod-region"]').forEach((input) => {
-          input.checked = selectedRegions.has(input.value);
-        });
       }
     }
 
@@ -638,7 +706,8 @@
     function saveRunpodConfig() {
       const payload = {
         allowed_gpu_ids: selectedRunpodValues("runpod-gpu"),
-        allowed_data_center_ids: selectedRunpodValues("runpod-region"),
+        deployment_region: document.getElementById("runpod-deployment-region").value,
+        priority_data_center_id: document.getElementById("runpod-priority-region").value,
       };
       setText("runpod-config-status", "Saving...");
       fetch("/runpod/config", {
@@ -653,6 +722,7 @@
         })
         .then((runpod) => {
           runpodConfigDirty = false;
+          runpodOptionSignature = "";
           renderRunpodSummary(runpod);
           renderRunpodOptions(runpod);
           const suffix = runpod.configuration_applies_on_next_creation
@@ -933,17 +1003,29 @@
           </div>
           <div class="status-text" id="runpod-action-status"></div>
           <fieldset>
+            <legend>Deployment regions</legend>
+            <div class="select-row">
+              <label for="runpod-deployment-region">Deployment geography</label>
+              <select id="runpod-deployment-region">
+                <option>Loading...</option>
+              </select>
+            </div>
+            <div class="select-row">
+              <label for="runpod-priority-region">Priority data center</label>
+              <select id="runpod-priority-region">
+                <option>Loading...</option>
+              </select>
+            </div>
+            <div class="field-help" id="runpod-region-help">Loading region availability...</div>
+          </fieldset>
+          <fieldset>
             <legend>Allowed cards</legend>
             <div class="option-grid" id="runpod-card-options"></div>
           </fieldset>
-          <fieldset>
-            <legend>Allowed North American regions</legend>
-            <div class="option-grid" id="runpod-region-options"></div>
-          </fieldset>
           <div class="actions">
-            <button class="primary" onclick="saveRunpodConfig()">Save allowed cards and regions</button>
+            <button class="primary" onclick="saveRunpodConfig()">Save deployment preferences</button>
           </div>
-          <div class="status-text" id="runpod-config-status">US-CA-2 is attempted first when selected.</div>
+          <div class="status-text" id="runpod-config-status"></div>
         </div>
 	    </section>
 

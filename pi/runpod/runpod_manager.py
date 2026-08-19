@@ -24,6 +24,12 @@ DEFAULT_MANAGER_PORT = 8082
 DEFAULT_POD_NAME = "bsp-convert-installation"
 DEFAULT_IMAGE = "kylemcdonald/bsp-convert:runpod-20260616-1386277"
 DEFAULT_CONTAINER_PORT = 8787
+DEFAULT_DEPLOYMENT_REGION = "north-america"
+DEFAULT_PRIORITY_DATA_CENTER = "US-CA-2"
+
+DEPLOYMENT_REGION_OPTIONS = [
+    {"id": DEFAULT_DEPLOYMENT_REGION, "name": "North America"},
+]
 
 DEFAULT_GPU_OPTIONS = [
     {"id": "NVIDIA H100 80GB HBM3", "name": "H100 SXM", "memory_gb": 80},
@@ -72,6 +78,18 @@ DEFAULT_DATA_CENTER_OPTIONS = [
 
 def utc_now():
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def elapsed_seconds(started_at, ended_at=None):
+    """Return a non-negative elapsed duration for two UTC ISO timestamps."""
+    if not started_at:
+        return None
+    try:
+        started = dt.datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+        ended = dt.datetime.fromisoformat(str(ended_at or utc_now()).replace("Z", "+00:00"))
+        return round(max(0.0, (ended - started).total_seconds()), 1)
+    except (TypeError, ValueError):
+        return None
 
 
 def parse_bool(value, default=True):
@@ -162,6 +180,8 @@ class RunpodManager:
         default_config = {
             "allowed_gpu_ids": [item["id"] for item in DEFAULT_GPU_OPTIONS],
             "allowed_data_center_ids": [item["id"] for item in DEFAULT_DATA_CENTER_OPTIONS],
+            "deployment_region": DEFAULT_DEPLOYMENT_REGION,
+            "priority_data_center_id": DEFAULT_PRIORITY_DATA_CENTER,
             "cloud_type": "SECURE",
             "container_disk_gb": 80,
             "container_port": DEFAULT_CONTAINER_PORT,
@@ -189,16 +209,21 @@ class RunpodManager:
         self.state.setdefault("message", "RunPod processor is stopped")
         self.state.setdefault("last_error", None)
         self.state.setdefault("desired_running", False)
+        self.state.setdefault("startup_started_at", None)
+        self.state.setdefault("startup_duration_seconds", None)
         self.state.setdefault("updated_at", utc_now())
         self.state.setdefault("last_event", None)
         self.state.setdefault("boot_id", self._boot_id())
         if self.autostart:
+            startup_started_at = utc_now()
             self.state["desired_running"] = True
             self.state["status"] = "starting"
             self.state["phase"] = "boot"
             self.state["message"] = "Waiting to start the RunPod processor"
             self.state["ready_at"] = None
             self.state["stopped_at"] = None
+            self.state["startup_started_at"] = startup_started_at
+            self.state["startup_duration_seconds"] = None
         self._save_state()
         self._event("manager_initialized", f"manager initialized; autostart={self.autostart}")
 
@@ -213,12 +238,25 @@ class RunpodManager:
     def _normalize_config(config, defaults):
         normalized = copy.deepcopy(defaults)
         normalized.update({key: value for key, value in config.items() if key in normalized})
+        legacy_dc_ids = config.get("allowed_data_center_ids")
+        if "priority_data_center_id" not in config and isinstance(legacy_dc_ids, list):
+            legacy_dc_ids = [str(value) for value in legacy_dc_ids if value]
+            if DEFAULT_PRIORITY_DATA_CENTER in legacy_dc_ids:
+                normalized["priority_data_center_id"] = DEFAULT_PRIORITY_DATA_CENTER
+            elif legacy_dc_ids:
+                normalized["priority_data_center_id"] = legacy_dc_ids[0]
         for key in ("allowed_gpu_ids", "allowed_data_center_ids"):
             values = normalized.get(key)
             if not isinstance(values, list):
                 normalized[key] = copy.deepcopy(defaults[key])
             else:
                 normalized[key] = list(dict.fromkeys(str(value) for value in values if value))
+        if normalized.get("deployment_region") not in {
+            option["id"] for option in DEPLOYMENT_REGION_OPTIONS
+        }:
+            normalized["deployment_region"] = DEFAULT_DEPLOYMENT_REGION
+        priority = str(normalized.get("priority_data_center_id") or "").strip()
+        normalized["priority_data_center_id"] = priority or DEFAULT_PRIORITY_DATA_CENTER
         return normalized
 
     def _save_state(self):
@@ -309,6 +347,7 @@ class RunpodManager:
         order = {item["id"]: index for index, item in enumerate(DEFAULT_GPU_OPTIONS)}
         gpu_options.sort(key=lambda item: order.get(item["id"], 999))
 
+        priority_dc_id = self.config.get("priority_data_center_id") or DEFAULT_PRIORITY_DATA_CENTER
         dc_options = []
         for dc in dc_payload if isinstance(dc_payload, list) else []:
             dc_id = str(dc.get("id") or "")
@@ -321,9 +360,14 @@ class RunpodManager:
                 "id": dc_id,
                 "name": dc.get("name") or dc_id,
                 "location": location or ("Canada" if dc_id.startswith("CA-") else "United States"),
-                "preferred": dc_id == "US-CA-2",
+                "deployment_region": DEFAULT_DEPLOYMENT_REGION,
+                "preferred": dc_id == priority_dc_id,
             })
-        dc_options.sort(key=lambda item: (item["id"] != "US-CA-2", item["location"], item["id"]))
+        dc_options.sort(key=lambda item: (
+            item["id"] != priority_dc_id,
+            item["location"],
+            item["id"],
+        ))
 
         with self.lock:
             if gpu_options:
@@ -336,6 +380,41 @@ class RunpodManager:
         port = int(self.config["container_port"])
         server_url = f"https://{pod_id}-{port}.proxy.runpod.net"
         return server_url, f"{server_url}/api/process"
+
+    def _deployment_data_center_ids(self, deployment_region=None):
+        deployment_region = deployment_region or self.config.get("deployment_region")
+        if deployment_region != DEFAULT_DEPLOYMENT_REGION:
+            return []
+        ids = [
+            item["id"]
+            for item in self.data_center_options
+            if item.get("id")
+            and (
+                item.get("deployment_region") == DEFAULT_DEPLOYMENT_REGION
+                or str(item["id"]).startswith(("US-", "CA-"))
+            )
+        ]
+        if not ids:
+            ids = [item["id"] for item in DEFAULT_DATA_CENTER_OPTIONS]
+        return list(dict.fromkeys(ids))
+
+    def _priority_data_center_id(self):
+        data_center_ids = self._deployment_data_center_ids()
+        configured = self.config.get("priority_data_center_id")
+        if configured in data_center_ids:
+            return configured
+        if DEFAULT_PRIORITY_DATA_CENTER in data_center_ids:
+            return DEFAULT_PRIORITY_DATA_CENTER
+        return data_center_ids[0] if data_center_ids else None
+
+    def _ensure_startup_timer(self):
+        if self.state.get("startup_started_at"):
+            return
+        self._update_state(
+            startup_started_at=utc_now(),
+            startup_duration_seconds=None,
+            ready_at=None,
+        )
 
     def _pod_details(self, pod_id):
         return self._run_cli("pod", "get", pod_id, "--include-machine", "-o", "json")
@@ -366,8 +445,9 @@ class RunpodManager:
     def _candidate_pairs(self):
         gpu_by_id = {item["id"]: item for item in self.gpu_options}
         selected_gpus = [gpu_id for gpu_id in self.config["allowed_gpu_ids"] if gpu_id in gpu_by_id]
-        selected_dcs = list(self.config["allowed_data_center_ids"])
-        selected_dcs.sort(key=lambda dc_id: (dc_id != "US-CA-2", dc_id))
+        selected_dcs = self._deployment_data_center_ids()
+        priority_dc_id = self._priority_data_center_id()
+        selected_dcs.sort(key=lambda dc_id: (dc_id != priority_dc_id, dc_id))
         candidates = []
         for dc_id in selected_dcs:
             for gpu_id in selected_gpus:
@@ -378,11 +458,12 @@ class RunpodManager:
         return candidates
 
     def _create_pod(self):
+        self._ensure_startup_timer()
         self._refresh_options(force=True)
         if not self.config["allowed_gpu_ids"]:
             raise RunpodCLIError("No RunPod GPU cards are selected")
-        if not self.config["allowed_data_center_ids"]:
-            raise RunpodCLIError("No RunPod regions are selected")
+        if not self._deployment_data_center_ids():
+            raise RunpodCLIError("The selected deployment region has no RunPod data centers")
         candidates = self._candidate_pairs()
         if not candidates:
             raise RunpodCLIError("No selected H100/H200/B200 card currently has stock in a selected North American region")
@@ -465,10 +546,11 @@ class RunpodManager:
             return True
         return (
             gpu_id in self.config["allowed_gpu_ids"]
-            and dc_id in self.config["allowed_data_center_ids"]
+            and dc_id in self._deployment_data_center_ids()
         )
 
     def _start_existing_pod(self, pod_id):
+        self._ensure_startup_timer()
         if time.monotonic() - self.start_request_at < 20:
             return
         self.start_request_at = time.monotonic()
@@ -551,18 +633,28 @@ class RunpodManager:
             )
             return False
         first_running = self.state.get("status") != "running"
+        ready_at = self.state.get("ready_at")
+        startup_duration = self.state.get("startup_duration_seconds")
+        if first_running:
+            ready_at = utc_now()
+            startup_duration = elapsed_seconds(
+                self.state.get("startup_started_at") or self.state.get("created_at"),
+                ready_at,
+            )
         self._update_state(
             status="running",
             phase="ready",
             message="bsp-convert is ready",
             last_error=None,
-            ready_at=self.state.get("ready_at") or utc_now(),
+            ready_at=ready_at or utc_now(),
+            startup_duration_seconds=startup_duration,
         )
         if first_running:
             self._event(
                 "processor_ready",
                 f"bsp-convert is ready at {self.state.get('endpoint')}",
                 pod_id=self.state.get("pod_id"),
+                startup_duration_seconds=startup_duration,
             )
         return True
 
@@ -738,7 +830,10 @@ class RunpodManager:
         self.worker.start()
 
     def request_start(self):
+        if self.state.get("desired_running") and self.state.get("status") == "running":
+            return
         self.next_retry_at = 0
+        startup_started_at = utc_now()
         self._update_state(
             desired_running=True,
             status="starting",
@@ -746,6 +841,9 @@ class RunpodManager:
             message="RunPod start requested",
             last_error=None,
             stopped_at=None,
+            ready_at=None,
+            startup_started_at=startup_started_at,
+            startup_duration_seconds=None,
         )
         self._event("manual_start", "manual RunPod start requested")
         self.wake.set()
@@ -766,26 +864,33 @@ class RunpodManager:
         if not isinstance(payload, dict):
             raise ValueError("configuration must be a JSON object")
         gpu_ids = payload.get("allowed_gpu_ids")
-        dc_ids = payload.get("allowed_data_center_ids")
+        deployment_region = str(payload.get("deployment_region") or "").strip()
+        priority_dc_id = str(payload.get("priority_data_center_id") or "").strip()
         known_gpu_ids = {item["id"] for item in self.gpu_options}
-        known_dc_ids = {item["id"] for item in self.data_center_options}
+        known_deployment_regions = {item["id"] for item in DEPLOYMENT_REGION_OPTIONS}
+        deployment_dc_ids = self._deployment_data_center_ids(deployment_region)
         if not isinstance(gpu_ids, list) or not gpu_ids:
             raise ValueError("select at least one GPU card")
-        if not isinstance(dc_ids, list) or not dc_ids:
-            raise ValueError("select at least one North American region")
+        if deployment_region not in known_deployment_regions:
+            raise ValueError("select a supported deployment region")
+        if priority_dc_id not in deployment_dc_ids:
+            raise ValueError("select a priority data center within the deployment region")
         gpu_ids = list(dict.fromkeys(str(value) for value in gpu_ids))
-        dc_ids = list(dict.fromkeys(str(value) for value in dc_ids))
         unknown_gpus = [value for value in gpu_ids if value not in known_gpu_ids]
-        unknown_dcs = [value for value in dc_ids if value not in known_dc_ids]
         if unknown_gpus:
             raise ValueError(f"unsupported GPU card(s): {', '.join(unknown_gpus)}")
-        if unknown_dcs:
-            raise ValueError(f"unsupported region(s): {', '.join(unknown_dcs)}")
         with self.lock:
             self.config["allowed_gpu_ids"] = gpu_ids
-            self.config["allowed_data_center_ids"] = dc_ids
+            self.config["deployment_region"] = deployment_region
+            self.config["priority_data_center_id"] = priority_dc_id
+            # Retain this derived field so existing installations and diagnostic
+            # scripts can read a complete list during the UI migration.
+            self.config["allowed_data_center_ids"] = deployment_dc_ids
             atomic_write_json(self.config_path, self.config)
-        self._event("configuration_updated", "allowed RunPod cards and regions updated")
+        self._event(
+            "configuration_updated",
+            f"RunPod cards updated; {priority_dc_id} is first in {deployment_region}",
+        )
         self.wake.set()
         return self.public_status()
 
@@ -795,14 +900,24 @@ class RunpodManager:
             config = copy.deepcopy(self.config)
             gpu_options = copy.deepcopy(self.gpu_options)
             dc_options = copy.deepcopy(self.data_center_options)
+        deployment_dc_ids = self._deployment_data_center_ids(config["deployment_region"])
+        priority_dc_id = self._priority_data_center_id()
+        for option in dc_options:
+            option["preferred"] = option.get("id") == priority_dc_id
         state["config"] = {
             "allowed_gpu_ids": config["allowed_gpu_ids"],
-            "allowed_data_center_ids": config["allowed_data_center_ids"],
+            "allowed_data_center_ids": deployment_dc_ids,
+            "deployment_region": config["deployment_region"],
+            "priority_data_center_id": priority_dc_id,
             "image": config["image"],
-            "preferred_data_center_id": "US-CA-2",
+            "preferred_data_center_id": priority_dc_id,
         }
+        state["deployment_region_options"] = copy.deepcopy(DEPLOYMENT_REGION_OPTIONS)
         state["gpu_options"] = gpu_options
         state["data_center_options"] = dc_options
+        state["startup_elapsed_seconds"] = None
+        if state.get("desired_running") and state.get("startup_duration_seconds") is None:
+            state["startup_elapsed_seconds"] = elapsed_seconds(state.get("startup_started_at"))
         state["configuration_applies_on_next_creation"] = not self._current_pod_allowed()
         return state
 

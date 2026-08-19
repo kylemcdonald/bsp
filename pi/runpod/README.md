@@ -10,17 +10,25 @@ The service uses the `runpodctl` authentication already configured for the
 its controls into `http://bsp-install.local:8080/`.
 
 Persistent configuration and lifecycle state live outside the checkout in
-`/var/lib/bsp-runpod/`. The UI stores selected GPU cards and regions in
-`config.json`. `US-CA-2` is always attempted first when it is selected.
+`/var/lib/bsp-runpod/`. The UI stores the deployment geography, priority data
+center, and selected GPU cards in `config.json`. The priority data center
+defaults to `US-CA-2`; other data centers in the deployment geography are
+automatic fallbacks. Card labels show current stock in the priority data center.
 Selections apply immediately to the next new pod. If a stopped managed pod no
-longer uses an allowed card and region, the manager deletes that stopped pod
-and creates a replacement when Start is requested or the Pi next boots.
+longer uses an allowed card or deployment geography, the manager deletes that
+stopped pod and creates a replacement when Start is requested or the Pi next
+boots.
+
+The UI reports elapsed startup time from the boot/manual Start request until
+`bsp-convert` confirms its model is loaded, then keeps the completed duration
+visible.
 
 Defaults:
 
 - image: `kylemcdonald/bsp-convert:runpod-20260616-1386277`
 - cards: H100 SXM/NVL/PCIe, H200 SXM/NVL, and B200
-- regions: all current United States and Canadian RunPod data centers
+- deployment geography: North America (all current United States and Canadian
+  RunPod data centers), with `US-CA-2` as the priority
 - cloud: secure
 - exposed port: `8787/http`
 - container disk: 80 GB
