@@ -9,8 +9,8 @@ from led_feedback import (
 
 
 class LedFeedbackTests(unittest.TestCase):
-    def test_runpod_starting_is_four_short_flashes_then_one_second_off(self):
-        pattern = PATTERNS['runpod_starting']
+    def test_runpod_not_ready_is_four_short_flashes_then_one_second_off(self):
+        pattern = PATTERNS['runpod_not_ready']
         samples = (
             (0.05, True),
             (0.15, False),
@@ -27,36 +27,30 @@ class LedFeedbackTests(unittest.TestCase):
             with self.subTest(elapsed=elapsed):
                 self.assertEqual(led_pattern_on(pattern, elapsed), expected)
 
-    def test_hardware_and_network_errors_take_priority_over_runpod_starting(self):
+    def test_hardware_and_network_errors_take_priority_over_runpod_not_ready(self):
         self.assertEqual(
-            service_feedback_pattern(False, True, True, 'HOME', 'starting', True),
+            service_feedback_pattern(False, True, True, 'HOME', 'starting'),
             'network_error',
         )
         self.assertEqual(
-            service_feedback_pattern(True, False, True, 'HOME', 'starting', True),
+            service_feedback_pattern(True, False, True, 'HOME', 'starting'),
             'camera_error',
         )
         self.assertEqual(
-            service_feedback_pattern(True, True, False, 'HOME', 'starting', True),
+            service_feedback_pattern(True, True, False, 'HOME', 'starting'),
             'plotter_error',
         )
         self.assertEqual(
-            service_feedback_pattern(True, True, True, 'HOME', 'starting', True),
-            'runpod_starting',
+            service_feedback_pattern(True, True, True, 'HOME', 'starting'),
+            'runpod_not_ready',
         )
         self.assertIsNone(
-            service_feedback_pattern(True, True, True, 'HOME', 'running', True)
+            service_feedback_pattern(True, True, True, 'HOME', 'running')
         )
 
-    def test_processor_wait_never_falls_through_to_solid_ready_state(self):
-        for status, desired_running in (
-            (None, None),
-            ('error', True),
-            ('blocked', True),
-            ('starting', True),
-            ('stopping', True),
-        ):
-            with self.subTest(status=status, desired_running=desired_running):
+    def test_processor_not_ready_never_falls_through_to_solid_ready_state(self):
+        for status in (None, 'error', 'blocked', 'starting', 'stopping', 'stopped'):
+            with self.subTest(status=status):
                 self.assertEqual(
                     service_feedback_pattern(
                         True,
@@ -64,15 +58,11 @@ class LedFeedbackTests(unittest.TestCase):
                         True,
                         'HOME',
                         status,
-                        desired_running,
                     ),
-                    'runpod_starting',
+                    'runpod_not_ready',
                 )
                 self.assertFalse(runpod_processor_ready(status))
 
-        self.assertIsNone(
-            service_feedback_pattern(True, True, True, 'HOME', 'stopped', False)
-        )
         self.assertFalse(runpod_processor_ready('stopped'))
         self.assertTrue(runpod_processor_ready('running'))
 

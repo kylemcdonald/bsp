@@ -176,10 +176,16 @@ Available settings:
 - `BSP_CAMERA_PREVIEW_URL`: local camera preview endpoint used by the plotter web UI, default `http://localhost:8081/preview.jpg`
 - `BSP_CAMERA_SETTINGS_URL`: local camera settings endpoint used by the plotter web UI, default `http://localhost:8081/settings`
 - `BSP_CAMERA_DEVICE`: optional V4L2 camera device/path used for capture and controls. If unset, the camera service prefers `/dev/v4l/by-id/*` and falls back to `/dev/video0`.
+- `BSP_CAMERA_FOURCC`: camera pixel format, default `MJPG`
+- `BSP_CAMERA_WIDTH`: requested camera capture width, default `3840`
+- `BSP_CAMERA_HEIGHT`: requested camera capture height, default `2160`
+- `BSP_CAMERA_FPS`: requested camera capture frame rate, default `5`
+- `BSP_CAMERA_GRAB_INTERVAL_SECONDS`: delay between idle camera buffer grabs, default `1 / BSP_CAMERA_FPS`
+- `BSP_CAMERA_KEEP_OPEN`: keep the camera stream open between captures/previews, default `true`
 - `BSP_TINYG_PORT`: optional TinyG serial device override, for example `/dev/ttyUSB0`
 
 Restart both `camera` and `plotter` after changing local camera/plotter URLs or
-the camera device:
+the camera device or format:
 
 ```sh
 sudo systemctl restart camera plotter
@@ -245,7 +251,7 @@ condition clears:
 - network disconnected: one `100ms` flash, then `1000ms` off
 - camera disconnected: two `100ms` flashes with `100ms` off between them, then `1000ms` off
 - plotter error: three `100ms` flashes with `100ms` off between them, then `1000ms` off
-- RunPod processor requested but not ready: four `100ms` flashes with `100ms` off between them, then `1000ms` off
+- RunPod processor not ready, including deliberately stopped: four `100ms` flashes with `100ms` off between them, then `1000ms` off
 
 The button service consumes the plotter's aggregated `GET /status` response,
 including its nested RunPod manager status, rather than polling RunPod itself.
@@ -257,12 +263,11 @@ status response is treated as camera disconnected. A missing plotter status
 response or plotter `ERROR` state is treated as plotter error.
 
 Solid white requires a confirmed RunPod `running` status in addition to the
-normal plotter button-light state. Unknown, retrying, blocked, error, and
-starting states use the four-flash pattern while the processor is desired. A
-deliberately stopped processor leaves the LED off.
+normal plotter button-light state. Unknown, retrying, blocked, error, starting,
+and deliberately stopped states all use the four-flash pattern.
 
 When more than one condition is present, the LED reports the first one in this
-order: network, camera, plotter, RunPod starting. During a normal capture, the
+order: network, camera, plotter, RunPod not ready. During a normal capture, the
 LED blinks at `250ms` on, `250ms` off. During a restart-armed button hold, that
 is overridden by the fast `200ms` on, `200ms` off pattern.
 

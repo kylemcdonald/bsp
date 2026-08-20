@@ -2,8 +2,10 @@ from flushed import log
 import cv2
 import time
 
-def wait_for_format(fourcc, width, height, fps, port=0):
-    while True:
+def wait_for_format(fourcc, width, height, fps, port=0, max_attempts=None):
+    attempts = 0
+    while max_attempts is None or attempts < max_attempts:
+        attempts += 1
         log(f'camera> connecting to port {port}: {fourcc} {width} x {height} @ {fps}fps')
         camera = cv2.VideoCapture(port)
         camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
@@ -30,8 +32,11 @@ def wait_for_format(fourcc, width, height, fps, port=0):
                 log('camera> not reading')
         log('camera> releasing camera')
         camera.release()
+        if max_attempts is not None and attempts >= max_attempts:
+            return None
         log('camera> wait_for_format sleeping')
         time.sleep(10)
+    return None
 
 if __name__ == '__main__':
     print('waiting for 4k')

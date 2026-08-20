@@ -22,9 +22,61 @@ plotter_error_url = os.environ.get('BSP_PLOTTER_CAPTURE_ERROR_URL', 'http://loca
 jpeg_quality = 50
 request_timeout = 120
 camera_device_override = os.environ.get('BSP_CAMERA_DEVICE')
+camera_fourcc = os.environ.get('BSP_CAMERA_FOURCC', 'MJPG')
+
+def parse_env_bool(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in ('1', 'true', 'yes', 'on'):
+        return True
+    if normalized in ('0', 'false', 'no', 'off'):
+        return False
+    raise RuntimeError(f'{name} must be true or false')
+
+def parse_env_int(name, default, min_value):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise RuntimeError(f'{name} must be an integer')
+    if parsed < min_value:
+        raise RuntimeError(f'{name} must be at least {min_value}')
+    return parsed
+
+def parse_env_float(name, default, min_value):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError:
+        raise RuntimeError(f'{name} must be a number')
+    if parsed < min_value:
+        raise RuntimeError(f'{name} must be at least {min_value}')
+    return parsed
+
+camera_width = parse_env_int('BSP_CAMERA_WIDTH', 3840, 1)
+camera_height = parse_env_int('BSP_CAMERA_HEIGHT', 2160, 1)
+camera_fps = parse_env_float('BSP_CAMERA_FPS', 5, 0.1)
+camera_grab_interval_seconds = parse_env_float(
+    'BSP_CAMERA_GRAB_INTERVAL_SECONDS',
+    1.0 / camera_fps,
+    0,
+)
+camera_keep_open = parse_env_bool('BSP_CAMERA_KEEP_OPEN', True)
 
 log('using plotter capture image endpoint', plotter_capture_image_url)
 log('using plotter capture error endpoint', plotter_error_url)
+log(
+    'using camera format',
+    f'{camera_fourcc} {camera_width} x {camera_height} @ {camera_fps:g}fps',
+    f'idle_grab_interval={camera_grab_interval_seconds:g}s',
+    f'keep_open={camera_keep_open}',
+)
 
 camera_control_specs = {
     'auto_exposure': {'min': 1, 'max': 3},
@@ -47,9 +99,10 @@ def parse_int(value, name, min_value, max_value):
     return parsed
 
 def run_v4l2_ctl(args):
-    if camera.current_port is None:
+    port = camera.current_camera_port()
+    if port is None:
         raise RuntimeError('camera is not connected')
-    command = ['v4l2-ctl', f'--device={camera.current_port}', *args]
+    command = ['v4l2-ctl', f'--device={port}', *args]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         message = result.stderr.strip() or result.stdout.strip() or 'v4l2-ctl failed'
@@ -133,14 +186,21 @@ def find_camera_port():
             return path
     return '/dev/video0'
 
+def camera_port_available(port):
+    if not isinstance(port, str):
+        return True
+    return os.path.exists(port)
+
 class Camera(threading.Thread):
     def __init__(self):
         super().__init__()
 
-        self.fourcc = 'MJPG'
-        self.width = 1920*2
-        self.height = 1080*2
-        self.fps = 5
+        self.fourcc = camera_fourcc
+        self.width = camera_width
+        self.height = camera_height
+        self.fps = camera_fps
+        self.grab_interval_seconds = camera_grab_interval_seconds
+        self.keep_open = camera_keep_open
         self.cap = None
         self.current_port = None
         self.cap_lock = threading.Lock()
@@ -151,7 +211,10 @@ class Camera(threading.Thread):
         self.shutter = queue.Queue()
 
         log('camera> waiting for availability')
-        self.reconnect()
+        if self.keep_open:
+            self.reconnect()
+        else:
+            self.probe_available()
         self.start()
 
     def set_available(self, available, error=None):
@@ -160,11 +223,63 @@ class Camera(threading.Thread):
             self.last_error = error
 
     def status(self):
+        if not self.keep_open:
+            self.probe_available()
         with self.status_lock:
             return {
                 'ready': self.available,
                 'error': self.last_error,
             }
+
+    def probe_available(self):
+        port = find_camera_port()
+        if not camera_port_available(port):
+            with self.cap_lock:
+                if self.cap is None:
+                    self.current_port = None
+            self.set_available(False, 'camera is not connected')
+            return False
+        with self.cap_lock:
+            self.current_port = port
+        self.set_available(True)
+        return True
+
+    def current_camera_port(self):
+        with self.cap_lock:
+            port = self.current_port
+        if port is not None and camera_port_available(port):
+            return port
+        if self.probe_available():
+            with self.cap_lock:
+                return self.current_port
+        return None
+
+    def open_camera_locked(self):
+        port = find_camera_port()
+        if not camera_port_available(port):
+            self.current_port = None
+            self.set_available(False, 'camera is not connected')
+            return None
+        cap = wait_for_format(self.fourcc, self.width, self.height, self.fps, port=port, max_attempts=1)
+        if cap is None:
+            self.current_port = None
+            self.set_available(False, 'camera is not connected')
+            return None
+        self.current_port = port
+        self.set_available(True)
+        return cap
+
+    def read_frame(self):
+        temporary_cap = None
+        with self.cap_lock:
+            cap = self.cap
+            if cap is None:
+                cap = self.open_camera_locked()
+                temporary_cap = cap
+            ret, img = cap.read() if cap is not None else (False, None)
+            if temporary_cap is not None:
+                temporary_cap.release()
+        return ret, img
 
     def reconnect(self):
         port = find_camera_port()
@@ -201,9 +316,7 @@ class Camera(threading.Thread):
         }
 
         log('camera> capture')
-        with self.cap_lock:
-            cap = self.cap
-            ret, img = cap.read() if cap is not None else (False, None)
+        ret, img = self.read_frame()
         timings['photo_received_at'] = time.perf_counter()
         if not ret:
             log('camera> capture failed')
@@ -256,9 +369,7 @@ class Camera(threading.Thread):
 
     def preview_jpeg(self):
         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
-        with self.cap_lock:
-            cap = self.cap
-            ret, img = cap.read() if cap is not None else (False, None)
+        ret, img = self.read_frame()
         if not ret:
             self.mark_disconnected('camera preview capture failed')
             raise RuntimeError('camera preview capture failed')
@@ -269,6 +380,14 @@ class Camera(threading.Thread):
 
     def run(self):
         while not self.shutdown.is_set():
+            if not self.keep_open:
+                try:
+                    request = self.shutter.get(timeout=0.2)
+                    self.capture(request['request_id'], request['trigger_received_at'])
+                except queue.Empty:
+                    self.probe_available()
+                continue
+
             if self.cap is None:
                 self.reconnect()
                 continue
@@ -286,7 +405,8 @@ class Camera(threading.Thread):
                 request = self.shutter.get_nowait()
                 self.capture(request['request_id'], request['trigger_received_at'])
             except queue.Empty:
-                pass
+                if self.grab_interval_seconds > 0:
+                    time.sleep(self.grab_interval_seconds)
         log('camera> received shutdown')
 
 app = Flask(__name__)

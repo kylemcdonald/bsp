@@ -3,7 +3,7 @@ PATTERNS = {
     'network_error': {'pulses': 1, 'on': 0.1, 'off': 0.1, 'pause': 1.0},
     'camera_error': {'pulses': 2, 'on': 0.1, 'off': 0.1, 'pause': 1.0},
     'plotter_error': {'pulses': 3, 'on': 0.1, 'off': 0.1, 'pause': 1.0},
-    'runpod_starting': {'pulses': 4, 'on': 0.1, 'off': 0.1, 'pause': 1.0},
+    'runpod_not_ready': {'pulses': 4, 'on': 0.1, 'off': 0.1, 'pause': 1.0},
     'restart_ready': {'pulses': None, 'on': 0.2, 'off': 0.2, 'pause': 0},
 }
 
@@ -14,7 +14,6 @@ def service_feedback_pattern(
     plotter_ready,
     plotter_state,
     runpod_status,
-    runpod_desired_running,
 ):
     if not network_ready:
         return 'network_error'
@@ -22,8 +21,8 @@ def service_feedback_pattern(
         return 'camera_error'
     if not plotter_ready or plotter_state == 'ERROR':
         return 'plotter_error'
-    if not runpod_processor_ready(runpod_status) and runpod_desired_running is not False:
-        return 'runpod_starting'
+    if not runpod_processor_ready(runpod_status):
+        return 'runpod_not_ready'
     return None
 
 

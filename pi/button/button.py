@@ -37,7 +37,6 @@ last_network_poll = 0
 network_ready = False
 processor_endpoint = None
 runpod_status = None
-runpod_desired_running = None
 led_pattern_name = None
 led_pattern_started = 0
 restart_ready_logged = False
@@ -71,7 +70,7 @@ def get(url):
 
 def apply_status(payload):
     global button_light_enabled, plotter_last_error, plotter_ready, plotter_state, processor_endpoint
-    global runpod_desired_running, runpod_status
+    global runpod_status
     if not isinstance(payload, dict):
         plotter_ready = False
         return
@@ -82,7 +81,6 @@ def apply_status(payload):
     button_light_enabled = bool(payload.get('button_light', True))
     runpod = payload.get('runpod')
     runpod_status = runpod.get('status') if isinstance(runpod, dict) else None
-    runpod_desired_running = runpod.get('desired_running') if isinstance(runpod, dict) else None
 
 def services_ready():
     return (
@@ -130,7 +128,6 @@ def current_error_pattern():
         plotter_ready,
         plotter_state,
         runpod_status,
-        runpod_desired_running,
     )
 
 def update_led(now):
