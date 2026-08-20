@@ -268,6 +268,44 @@ class RunpodManagerTests(unittest.TestCase):
         with mock.patch.object(module.time, "monotonic", return_value=112.0):
             self.assertEqual(self.manager.public_status()["startup_elapsed_seconds"], 12.0)
 
+    def test_warm_start_replaces_pod_when_runpod_reports_no_free_gpus(self):
+        self.manager.state.update({
+            "pod_id": "oldpod",
+            "gpu_id": "NVIDIA H100 NVL",
+            "data_center_id": "US-CA-2",
+            "desired_running": True,
+            "status": "stopped",
+        })
+        self.manager._refresh_options = mock.Mock()
+        calls = []
+        capacity_error = (
+            '{"error":"failed to start pod: start pod: There are not enough free GPUs '
+            'on the host machine to start this pod.","code":"server_error","status":500}'
+        )
+
+        def run_cli(*args, **kwargs):
+            calls.append(args)
+            if args[:2] == ("pod", "get"):
+                return {"id": "oldpod", "runtimeStatus": "stopped"}
+            if args[:2] == ("pod", "start"):
+                raise module.RunpodCLIError(capacity_error)
+            if args[:2] == ("pod", "delete"):
+                return {}
+            raise AssertionError(args)
+
+        self.manager._run_cli = run_cli
+        with mock.patch.object(module.time, "monotonic", return_value=100.0):
+            self.manager.reconcile()
+
+        self.assertTrue(any(call[:3] == ("pod", "delete", "oldpod") for call in calls))
+        self.assertIsNone(self.manager.state["pod_id"])
+        self.assertTrue(self.manager.state["desired_running"])
+        self.assertEqual(self.manager.state["phase"], "replacing")
+        self.assertEqual(
+            self.manager.state["last_event"]["kind"],
+            "pod_deleted_for_replacement",
+        )
+
     def test_repeated_stop_refreshes_timestamp_after_a_new_run(self):
         self.manager.state.update({
             "pod_id": "pod123",

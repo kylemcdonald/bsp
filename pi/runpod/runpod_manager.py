@@ -28,6 +28,15 @@ DEFAULT_DEPLOYMENT_REGION = "north-america"
 DEFAULT_PRIORITY_DATA_CENTER = "US-CA-2"
 DEFAULT_PRIORITY_GPU_IDS = ["NVIDIA H100 80GB HBM3"]
 
+CAPACITY_ERROR_TOKENS = (
+    "capacity",
+    "available gpu",
+    "free gpu",
+    "no gpu",
+    "stock",
+    "instance available",
+)
+
 DEPLOYMENT_REGION_OPTIONS = [
     {"id": DEFAULT_DEPLOYMENT_REGION, "name": "North America"},
     {"id": "europe", "name": "Europe"},
@@ -133,6 +142,11 @@ def parse_bool(value, default=True):
     if value is None:
         return default
     return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def is_capacity_error(message):
+    normalized = str(message or "").lower()
+    return any(token in normalized for token in CAPACITY_ERROR_TOKENS)
 
 
 def atomic_write_json(path, payload):
@@ -861,12 +875,11 @@ class RunpodManager:
                 except RunpodCLIError as exc:
                     self.next_retry_at = time.monotonic() + self.retry_seconds
                     message = str(exc)
-                    blocked = (
+                    blocked = is_capacity_error(message) or (
                         "No selected" in message
                         or "no pod id" in message
                         or "could not create" in message.lower()
                         or "insufficient" in message.lower()
-                        or "stock" in message.lower()
                     )
                     self._update_state(
                         status="blocked" if blocked else "error",
@@ -954,11 +967,7 @@ class RunpodManager:
                 self._start_existing_pod(pod_id)
             except RunpodCLIError as exc:
                 message = str(exc)
-                capacity_error = any(
-                    token in message.lower()
-                    for token in ("capacity", "available gpu", "no gpu", "stock", "instance available")
-                )
-                if capacity_error:
+                if is_capacity_error(message):
                     try:
                         self._delete_stopped_pod(pod_id, "its GPU is no longer available")
                     except RunpodCLIError as delete_exc:
